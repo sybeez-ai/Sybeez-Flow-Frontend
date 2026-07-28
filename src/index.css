@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 5%;
+
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 88%;
+
+    --muted: 0 0% 13%;
+    --muted-foreground: 0 0% 50%;
+
+    --accent: 0 0% 14%;
+    --accent-foreground: 0 0% 96%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 15%;
+    --input: 0 0% 15%;
+    --ring: 0 0% 28%;
+
+    --radius: 0.75rem;
+
+    --browser-bg: 0 0% 4%;
+    --nav-border: 0 0% 12%;
+    --input-bg: 0 0% 9%;
+    --hover-bg: 0 0% 11%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* Subtle ambient glow at the top center */
+    background-image:
+      radial-gradient(ellipse 80% 40% at 50% -10%, rgba(255,255,255,0.04) 0%, transparent 70%);
+    background-attachment: fixed;
+  }
+}
+
+/* ── Apple Glassmorphism utilities ─────────────────────────────── */
+@layer utilities {
+  .glass {
+    background: rgba(255, 255, 255, 0.045);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.06) inset,
+      0 8px 32px rgba(0,0,0,0.45);
+  }
+
+  .glass-card {
+    background: rgba(255, 255, 255, 0.035);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.05) inset,
+      0 4px 24px rgba(0,0,0,0.35);
+  }
+
+  .glass-subtle {
+    background: rgba(255, 255, 255, 0.022);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.055);
+  }
+
+  .glow-ring {
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 0 20px rgba(255,255,255,0.03);
+  }
+}
+
+/* Custom bee wing animation */
+@keyframes wing {
+  0%, 100% {
+    transform: scaleY(1) translateY(0);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scaleY(0.3) translateY(-2px);
+    opacity: 0.9;
+  }
+}

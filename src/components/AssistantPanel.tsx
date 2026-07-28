@@ -1,0 +1,386 @@
+import { useEffect, useRef, useState } from "react";
+import { ArrowUp, Bot, Loader2, Plus, Sparkles, User, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Textarea } from "@/components/ui/textarea";
+import { askAIDetailed } from "@/services/aiService";
+import { chatHistory } from "@/services/chatHistory";
+import { sanitizeAssistantText } from "@/services/financeChatFormat";
+import {
+  OPEN_CHAT_SESSION_EVENT,
+  archiveChatSession,
+  baseSessionKey,
+  loadChatSession,
+  persistChatSession,
+  type OpenChatSessionDetail,
+} from "@/services/chatSessionStore";
+import ChatHistoryPopover from "@/components/ChatHistoryPopover";
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantPanelProps {
+  title: string;
+  subtitle?: string;
+  system: string;
+  sessionId: string;
+  placeholder?: string;
+  emptyHint?: string;
+  suggestions?: string[];
+  /** Returns live structured context injected with every message (sync or async). */
+  getContext?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  /** Allow live web search / RAG on the backend. */
+  useWebSearch?: boolean;
+  /** Omit to keep the panel pinned (no close button). */
+  onClose?: () => void;
+}
+
+const AssistantPanel = ({
+  title,
+  subtitle,
+  system,
+  sessionId: baseSessionId,
+  placeholder = "Ask anything…",
+  emptyHint = "Ask me anything to get started.",
+  suggestions = [],
+  getContext,
+  useWebSearch = false,
+  onClose,
+}: AssistantPanelProps) => {
+  const [activeSessionId, setActiveSessionId] = useState(() => {
+    try {
+      return localStorage.getItem(`sybeez_chat_sid_${baseSessionId}`) || baseSessionId;
+    } catch {
+      return baseSessionId;
+    }
+  });
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const resizeComposer = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 24), 160)}px`;
+  };
+
+  // Remember active thread so reload continues the same conversation
+  useEffect(() => {
+    try {
+      localStorage.setItem(`sybeez_chat_sid_${baseSessionId}`, activeSessionId);
+    } catch {
+      /* ignore */
+    }
+  }, [baseSessionId, activeSessionId]);
+
+  // Load persisted chat from SQLite when panel opens / session changes
+  useEffect(() => {
+    let cancelled = false;
+    setHydrated(false);
+    (async () => {
+      const stored = await loadChatSession(activeSessionId);
+      if (cancelled) return;
+      if (stored.length) {
+        setMessages(stored);
+      } else {
+        setMessages([]);
+      }
+      setHydrated(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    // Only reset when the panel's base session type changes (e.g. finance → planner)
+    try {
+      const saved = localStorage.getItem(`sybeez_chat_sid_${baseSessionId}`);
+      setActiveSessionId(saved || baseSessionId);
+    } catch {
+      setActiveSessionId(baseSessionId);
+    }
+  }, [baseSessionId]);
+
+  // Open a full chat thread from History sidebar
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent<OpenChatSessionDetail>).detail;
+      if (!detail?.sessionId) return;
+      if (baseSessionKey(detail.sessionId) !== baseSessionId) return;
+      setActiveSessionId(detail.sessionId);
+    };
+    window.addEventListener(OPEN_CHAT_SESSION_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CHAT_SESSION_EVENT, onOpen);
+  }, [baseSessionId]);
+
+  // Review tab → inject AI weekly review into Productivity Coach chat
+  useEffect(() => {
+    if (baseSessionId !== "productivity-coach") return;
+    const onReview = (e: Event) => {
+      const detail = (e as CustomEvent<{ text?: string; week?: string }>).detail;
+      const text = (detail?.text || "").trim();
+      if (!text) return;
+      setMessages((prev) => {
+        const next: ChatMessage[] = [
+          ...prev,
+          { role: "user", content: "Generate my weekly review" },
+          { role: "assistant", content: text },
+        ];
+        void persistChatSession(
+          activeSessionId,
+          next,
+          `Weekly review${detail?.week ? ` (${detail.week})` : ""}`,
+        ).then(() => window.dispatchEvent(new Event("sybeez-chat-saved")));
+        return next;
+      });
+    };
+    window.addEventListener("sybeez-planner-review", onReview);
+    return () => window.removeEventListener("sybeez-planner-review", onReview);
+  }, [baseSessionId, activeSessionId]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, isLoading]);
+
+  useEffect(() => {
+    resizeComposer();
+  }, [input]);
+
+  const startNewChat = async () => {
+    // Keep prior messages in DB; open a fresh session id for the UI
+    if (messages.length) {
+      await persistChatSession(activeSessionId, messages, title);
+      await archiveChatSession(activeSessionId);
+      window.dispatchEvent(new Event("sybeez-chat-saved"));
+    }
+    const nextId = `${baseSessionId}-${Date.now().toString(36)}`;
+    setActiveSessionId(nextId);
+    setMessages([]);
+    setInput("");
+  };
+
+  const send = async (text: string) => {
+    const prompt = text.trim();
+    if (!prompt || isLoading || !hydrated) return;
+
+    const nextHistory = [...messages];
+    const withUser: ChatMessage[] = [...nextHistory, { role: "user", content: prompt }];
+    setMessages(withUser);
+    setInput("");
+    setIsLoading(true);
+
+    if (nextHistory.length === 0) {
+      chatHistory.add(prompt, activeSessionId, title);
+    }
+
+    try {
+      let context: Record<string, unknown> = {};
+      try {
+        const raw = getContext?.();
+        context = (raw && typeof (raw as Promise<unknown>).then === "function"
+          ? await (raw as Promise<Record<string, unknown>>)
+          : (raw as Record<string, unknown>)) ?? {};
+      } catch {
+        /* ignore */
+      }
+      const web =
+        useWebSearch ||
+        context.enableWebSearch === true ||
+        context.feature === "finance";
+      const { text: reply } = await askAIDetailed(prompt, {
+        system,
+        sessionId: activeSessionId,
+        history: nextHistory,
+        context,
+        useWebSearch: web,
+        applyActions: true,
+      });
+      const safe =
+        context.feature === "finance"
+          ? sanitizeAssistantText(reply, context.financeSnapshot)
+          : reply;
+      const withAssistant: ChatMessage[] = [
+        ...withUser,
+        { role: "assistant", content: safe },
+      ];
+      setMessages(withAssistant);
+      const threadTitle =
+        (nextHistory.find((m) => m.role === "user")?.content || prompt).slice(0, 100);
+      // Persist full thread (SQLite append-only)
+      void persistChatSession(activeSessionId, withAssistant, threadTitle).then(() => {
+        window.dispatchEvent(new Event("sybeez-chat-saved"));
+      });
+    } catch {
+      const errMsg =
+        "Sorry, I couldn't reach the assistant just now. Please try again.";
+      const withErr: ChatMessage[] = [
+        ...withUser,
+        { role: "assistant", content: errMsg },
+      ];
+      setMessages(withErr);
+      void persistChatSession(
+        activeSessionId,
+        withErr,
+        (nextHistory.find((m) => m.role === "user")?.content || prompt).slice(0, 100),
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <aside className="w-[420px] flex-none flex flex-col border-l border-border bg-card/30">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 h-[57px] border-b border-border/60">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground">
+            <Sparkles className="h-4 w-4 text-background" />
+          </div>
+          <div className="leading-tight">
+            <p className="text-sm font-semibold">{title}</p>
+            {subtitle && <p className="text-[11px] text-muted-foreground">{subtitle}</p>}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <ChatHistoryPopover
+            baseSessionId={baseSessionId}
+            activeSessionId={activeSessionId}
+            onSelect={(sessionId) => setActiveSessionId(sessionId)}
+          />
+          <button
+            onClick={() => void startNewChat()}
+            title="New chat (keeps history in database)"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Close"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
+        {!hydrated ? (
+          <div className="flex h-full items-center justify-center text-muted-foreground text-sm gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading chat…
+          </div>
+        ) : messages.length === 0 && !isLoading ? (
+          <div className="flex h-full flex-col items-center justify-center text-center">
+            <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-muted ring-1 ring-border">
+              <Sparkles className="h-5 w-5 text-foreground" />
+            </div>
+            <p className="text-sm text-muted-foreground max-w-[240px]">{emptyHint}</p>
+            {suggestions.length > 0 && (
+              <div className="mt-5 flex flex-col gap-2 w-full">
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => send(s)}
+                    className="w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-left text-[13px] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            {messages.map((m, i) => (
+              <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                {m.role === "assistant" && (
+                  <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-foreground">
+                    <Bot className="h-3.5 w-3.5 text-background" />
+                  </div>
+                )}
+                <div
+                  className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed ${
+                    m.role === "user"
+                      ? "bg-foreground text-background whitespace-pre-wrap"
+                      : "border border-border bg-background text-foreground"
+                  }`}
+                >
+                  {m.role === "assistant" ? (
+                    <div className="assistant-md [&_p]:mb-2.5 [&_p:last-child]:mb-0 [&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-[15px] [&_h1]:font-semibold [&_h1:first-child]:mt-0 [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-[14px] [&_h2]:font-semibold [&_h2:first-child]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-2.5 [&_h3]:text-[13.5px] [&_h3]:font-semibold [&_h3:first-child]:mt-0 [&_ul]:my-2 [&_ul]:space-y-1.5 [&_ol]:my-2 [&_ol]:space-y-1.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_ul]:list-none [&_ul]:pl-0 [&_li]:leading-relaxed [&_strong]:font-semibold [&_strong]:text-foreground [&_a]:underline [&_hr]:my-3 [&_hr]:border-border">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    m.content
+                  )}
+                </div>
+                {m.role === "user" && (
+                  <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-muted ring-1 ring-border">
+                    <User className="h-3.5 w-3.5 text-muted-foreground" />
+                  </div>
+                )}
+              </div>
+            ))}
+            {isLoading && (
+              <div className="flex gap-2.5 justify-start">
+                <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-foreground">
+                  <Bot className="h-3.5 w-3.5 text-background" />
+                </div>
+                <div className="flex items-center gap-2 rounded-2xl border border-border bg-background px-3.5 py-2.5 text-[13.5px] text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Thinking…
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Composer */}
+      <div className="border-t border-border/60 p-3">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(input);
+          }}
+          className="relative flex items-end gap-2 rounded-2xl border border-border bg-background px-3.5 py-2.5 transition-colors focus-within:border-foreground/30"
+        >
+          <Textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send(input);
+              }
+            }}
+            placeholder={placeholder}
+            rows={1}
+            className="min-h-[24px] max-h-40 flex-1 resize-none overflow-y-auto border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 text-[13.5px] leading-relaxed"
+          />
+          <button
+            type="submit"
+            disabled={!input.trim() || isLoading || !hydrated}
+            className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-foreground text-background transition-opacity disabled:opacity-30"
+            aria-label="Send"
+          >
+            {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-3.5 w-3.5" />}
+          </button>
+        </form>
+      </div>
+    </aside>
+  );
+};
+
+export default AssistantPanel;
