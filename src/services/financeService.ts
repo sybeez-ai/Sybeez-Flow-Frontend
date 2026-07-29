@@ -4,9 +4,11 @@
  */
 
 import { LifeManagementService } from "./lifeManagement";
+import { authHeaders, currentUserId } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
 
-const FINANCE_API_BASE = 'http://localhost:8000/api/finance';
-const DEFAULT_USER_ID = 'default_user';
+const FINANCE_API_BASE = `${getApiBase()}/api/finance`;
+const DEFAULT_USER_ID = () => currentUserId() || 'anon';
 
 export interface DailyTransaction {
   name: string;
@@ -61,17 +63,17 @@ export class FinanceService {
         expense_breakdown
       };
       
-      await fetch(`${FINANCE_API_BASE}/budget/${DEFAULT_USER_ID}`, {
+      await fetch(`${FINANCE_API_BASE}/budget/${DEFAULT_USER_ID()}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify(budgetData)
       });
       
       // Add savings goals
       for (const plan of lifeData.savingsPlans) {
-        await fetch(`${FINANCE_API_BASE}/savings-goal/${DEFAULT_USER_ID}`, {
+        await fetch(`${FINANCE_API_BASE}/savings-goal/${DEFAULT_USER_ID()}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({
             name: plan.name,
             target_amount: plan.targetAmount || 0,
@@ -84,9 +86,9 @@ export class FinanceService {
       
       // Add loans/EMIs
       for (const emi of lifeData.emis) {
-        await fetch(`${FINANCE_API_BASE}/loan/${DEFAULT_USER_ID}`, {
+        await fetch(`${FINANCE_API_BASE}/loan/${DEFAULT_USER_ID()}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({
             loan_name: emi.name,
             principal_amount: emi.amount * (emi.remainingMonths || 12),
@@ -112,9 +114,9 @@ export class FinanceService {
     try {
       const response = await fetch(`${FINANCE_API_BASE}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
-          user_id: DEFAULT_USER_ID,
+          user_id: DEFAULT_USER_ID(),
           question: question
         })
       });
@@ -135,7 +137,7 @@ export class FinanceService {
    */
   static async getFinancialSnapshot(): Promise<any> {
     try {
-      const response = await fetch(`${FINANCE_API_BASE}/snapshot/${DEFAULT_USER_ID}`);
+      const response = await fetch(`${FINANCE_API_BASE}/snapshot/${DEFAULT_USER_ID()}`);
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

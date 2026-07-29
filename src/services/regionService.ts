@@ -5,6 +5,7 @@
 
 import { currencyService } from "@/services/currencyService";
 import { netWorthService } from "@/services/netWorthService";
+import { usGetItem, usSetItem, usGetJSON, usSetJSON } from "@/services/userStorage";
 
 export type ConsentKind = "gdpr" | "terms_asia" | "terms_general";
 
@@ -184,7 +185,7 @@ export function buildRegionProfile(input: {
 
 export function getRegionProfile(): RegionProfile | null {
   try {
-    const raw = localStorage.getItem(PROFILE_KEY);
+    const raw = usGetItem(PROFILE_KEY);
     if (!raw) return null;
     return JSON.parse(raw) as RegionProfile;
   } catch {
@@ -193,7 +194,7 @@ export function getRegionProfile(): RegionProfile | null {
 }
 
 export function saveRegionProfile(profile: RegionProfile): void {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  usSetItem(PROFILE_KEY, JSON.stringify(profile));
 }
 
 export interface LegalConsentRecord {
@@ -206,7 +207,7 @@ export interface LegalConsentRecord {
 
 export function getLegalConsent(): LegalConsentRecord | null {
   try {
-    const raw = localStorage.getItem(CONSENT_KEY);
+    const raw = usGetItem(CONSENT_KEY);
     if (!raw) return null;
     return JSON.parse(raw) as LegalConsentRecord;
   } catch {
@@ -215,7 +216,7 @@ export function getLegalConsent(): LegalConsentRecord | null {
 }
 
 export function saveLegalConsent(record: LegalConsentRecord): void {
-  localStorage.setItem(CONSENT_KEY, JSON.stringify(record));
+  usSetItem(CONSENT_KEY, JSON.stringify(record));
 }
 
 /** Apply currency / locale everywhere after registration. */
@@ -229,7 +230,7 @@ export function applyRegionProfile(profile: RegionProfile): void {
   }
 
   try {
-    const raw = localStorage.getItem("sybeez_settings");
+    const raw = usGetItem("sybeez_settings");
     const settings = raw ? JSON.parse(raw) : {};
     settings.preferences = {
       ...(settings.preferences || {}),
@@ -252,7 +253,7 @@ export function applyRegionProfile(profile: RegionProfile): void {
       area: profile.area,
       consentKind: profile.consentKind,
     };
-    localStorage.setItem("sybeez_settings", JSON.stringify(settings));
+    usSetItem("sybeez_settings", JSON.stringify(settings));
   } catch {
     /* ignore */
   }

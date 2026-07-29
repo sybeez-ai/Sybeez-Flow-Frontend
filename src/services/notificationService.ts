@@ -1,4 +1,5 @@
 import { LifeManagementService } from "@/services/lifeManagement";
+import { usGetItem, usSetItem } from "@/services/userStorage";
 
 export type NotificationModule = "finance" | "planner" | "gmail" | "diary" | "focus" | "system";
 export type NotificationTarget =
@@ -48,7 +49,7 @@ const DEFAULT_PREFS: NotificationPrefs = {
 
 function readJSON<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = usGetItem(key);
     if (!raw) return fallback;
     return JSON.parse(raw) as T;
   } catch {
@@ -100,7 +101,7 @@ function saveNotifications(items: AppNotification[]) {
   const trimmed = items
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 100);
-  localStorage.setItem(STORE_KEY, JSON.stringify(trimmed));
+  usSetItem(STORE_KEY, JSON.stringify(trimmed));
   emitChange();
 }
 

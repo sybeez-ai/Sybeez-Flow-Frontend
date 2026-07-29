@@ -1,3 +1,4 @@
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -56,14 +57,14 @@ const DEFAULT_STATS: GmailStats = {
 
 function loadGmailData() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = usGetItem(STORAGE_KEY);
     if(raw) return JSON.parse(raw);
   } catch {}
   return { emails: [], stats: DEFAULT_STATS, aiMessages: [] };
 }
 
 function saveGmailData(data: any) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  usSetItem(STORAGE_KEY, JSON.stringify(data));
 }
 
 // ─── Tab Config ────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -246,7 +247,7 @@ const SettingsPanel = ({ isOpen, onClose, initialSection = "account", inline = f
   const [selectedConnectorCategory, setSelectedConnectorCategory] = useState<string>('All categories');
 
   useEffect(() => {
-    const saved = localStorage.getItem('sybeez_settings');
+    const saved = usGetItem("sybeez_settings");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -297,7 +298,7 @@ const SettingsPanel = ({ isOpen, onClose, initialSection = "account", inline = f
   }, [initialSection]);
 
   const saveSettings = () => {
-    localStorage.setItem('sybeez_settings', JSON.stringify(settings));
+    usSetItem("sybeez_settings", JSON.stringify(settings));
     setHasChanges(false);
   };
 

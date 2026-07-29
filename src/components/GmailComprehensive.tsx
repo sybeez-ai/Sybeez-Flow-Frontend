@@ -2,6 +2,7 @@
  * Comprehensive Gmail Integration Component
  */
 
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -52,7 +53,7 @@ const STORAGE_KEY = 'sybeez_gmail_comprehensive_data';
 
 function loadGmailData() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = usGetItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
   return {
@@ -65,7 +66,7 @@ function loadGmailData() {
 }
 
 function saveGmailData(data: any) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  usSetItem(STORAGE_KEY, JSON.stringify(data));
 }
 
 const TABS: { id: TabId; label: string; Icon: React.FC<{ className?: string }> }[] = [

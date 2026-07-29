@@ -1,3 +1,5 @@
+import { authHeaders } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
 /**
  * Unified AI Service
  * Single entry point for all AI features across the app (Finance + Life Planner).
@@ -14,7 +16,7 @@ import {
   formatPortfolioOverview,
 } from "@/services/financeChatFormat";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = getApiBase();
 
 export interface AIAskOptions {
   /** A system prompt describing the assistant's role. */
@@ -125,7 +127,7 @@ export async function askAIDetailed(
   try {
     const res = await fetch(`${API_URL}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
       signal,
       body: JSON.stringify({
         message: prompt,

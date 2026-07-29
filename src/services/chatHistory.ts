@@ -1,3 +1,4 @@
+import { usGetItem, usSetItem } from "@/services/userStorage";
 // Lightweight conversation-history store shared across the app.
 // Records the first user message of each chat session so the History
 // panel can list real conversations (persisted in localStorage).
@@ -16,7 +17,7 @@ const EVENT = "stabee-history-updated";
 
 function read(): HistoryEntry[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = usGetItem(STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -26,7 +27,7 @@ function read(): HistoryEntry[] {
 
 function write(entries: HistoryEntry[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+    usSetItem(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
     window.dispatchEvent(new CustomEvent(EVENT));
   } catch {
     /* ignore */

@@ -5,6 +5,7 @@
  * display currency via currencyService.
  */
 
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import { useEffect, useMemo, useState } from "react";
 import {
   Wallet,
@@ -169,7 +170,7 @@ const NetWorthTracker = () => {
     totalLiabilities: number;
     netWorth: number;
   }>>(
-    JSON.parse(localStorage.getItem("nw_snapshots") || "[]")
+    JSON.parse(usGetItem("nw_snapshots") || "[]")
   );
 
   const takeSnapshot = () => {
@@ -188,7 +189,7 @@ const NetWorthTracker = () => {
     };
     const updated = [...snapshots, newSnapshot];
     setSnapshots(updated);
-    localStorage.setItem("nw_snapshots", JSON.stringify(updated));
+    usSetItem("nw_snapshots", JSON.stringify(updated));
     toast.success("Snapshot taken");
   };
 
@@ -206,7 +207,7 @@ const NetWorthTracker = () => {
     amountUsd: number;
     label: string;
   }>>(
-    JSON.parse(localStorage.getItem("nw_vesting_events") || "[]")
+    JSON.parse(usGetItem("nw_vesting_events") || "[]")
   );
 
   const [vestingInput, setVestingInput] = useState({ month: "", amountUsd: 0, label: "" });
@@ -217,7 +218,7 @@ const NetWorthTracker = () => {
     }
     const updated = [...vestingEvents, vestingInput];
     setVestingEvents(updated);
-    localStorage.setItem("nw_vesting_events", JSON.stringify(updated));
+    usSetItem("nw_vesting_events", JSON.stringify(updated));
     setVestingInput({ month: "", amountUsd: 0, label: "" });
     toast.success("Vesting event added");
   };
@@ -225,7 +226,7 @@ const NetWorthTracker = () => {
   const removeVestingEvent = (month: string) => {
     const updated = vestingEvents.filter(v => v.month !== month);
     setVestingEvents(updated);
-    localStorage.setItem("nw_vesting_events", JSON.stringify(updated));
+    usSetItem("nw_vesting_events", JSON.stringify(updated));
     toast.success("Vesting event removed");
   };
 

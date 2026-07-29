@@ -1,3 +1,4 @@
+import { usGetItem } from "@/services/userStorage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
@@ -187,7 +188,7 @@ const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => 
       }> = [];
 
       try {
-        const ext = JSON.parse(localStorage.getItem("sybeez_extended_life_data") || "null");
+        const ext = JSON.parse(usGetItem("sybeez_extended_life_data") || "null");
         if (ext) {
           schedule = Array.isArray(ext.dailySchedule) ? ext.dailySchedule : [];
           habits = Array.isArray(ext.habits) ? ext.habits : [];
@@ -239,7 +240,7 @@ const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => 
       );
 
       try {
-        const diary = JSON.parse(localStorage.getItem("sybeez_life_diary") || "null");
+        const diary = JSON.parse(usGetItem("sybeez_life_diary") || "null");
         if (Array.isArray(diary)) diaryEntries = diary.length;
         else if (Array.isArray(diary?.entries)) diaryEntries = diary.entries.length;
       } catch {

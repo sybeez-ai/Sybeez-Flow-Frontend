@@ -1,11 +1,12 @@
 import { LifeManagementData, Subscription, EMI, Insurance, Bill, Task, Meeting, Habit, Reminder, SavingsPlan, SavingsItem, Investment, CreditCard, Budget, Transaction, FinancialSummary } from "@/types/lifeManagement";
+import { usGetItem, usSetItem } from "@/services/userStorage";
 
 const STORAGE_KEY = "life_management_data";
 
 export class LifeManagementService {
   
   static getData(): LifeManagementData {
-    const data = localStorage.getItem(STORAGE_KEY);
+    const data = usGetItem(STORAGE_KEY);
     if (data) {
       const parsed = JSON.parse(data);
       // Ensure new fields exist
@@ -45,7 +46,7 @@ export class LifeManagementService {
   }
 
   static saveData(data: LifeManagementData): void {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    usSetItem(STORAGE_KEY, JSON.stringify(data));
   }
 
   // Subscriptions

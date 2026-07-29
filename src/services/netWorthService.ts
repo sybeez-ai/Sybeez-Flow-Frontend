@@ -3,6 +3,7 @@
 // chosen display currency. Persisted in localStorage.
 
 import { currencyService } from "@/services/currencyService";
+import { usGetItem, usSetItem } from "@/services/userStorage";
 
 export type AssetCategory =
   | "Bank Accounts"
@@ -78,7 +79,7 @@ function seed(): NetWorthData {
 
 function read(): NetWorthData {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = usGetItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as NetWorthData;
       if (parsed && Array.isArray(parsed.assets) && Array.isArray(parsed.liabilities)) {
@@ -95,7 +96,7 @@ function read(): NetWorthData {
 
 function write(data: NetWorthData) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    usSetItem(STORAGE_KEY, JSON.stringify(data));
     window.dispatchEvent(new CustomEvent(EVENT));
   } catch {
     /* ignore */

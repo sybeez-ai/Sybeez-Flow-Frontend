@@ -10,6 +10,7 @@
  *   • Explore    — live symbol search + popular quick-picks.
  */
 
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   TrendingUp,

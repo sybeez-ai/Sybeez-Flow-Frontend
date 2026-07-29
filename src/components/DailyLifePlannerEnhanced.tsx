@@ -1,3 +1,4 @@
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -90,7 +91,7 @@ const DEFAULT_POMODORO_SETTINGS: PomodoroSettings = {
 
 function loadExtData(): ExtendedDailyLifeData {
   try {
-    const raw = localStorage.getItem(EXT_KEY);
+    const raw = usGetItem(EXT_KEY);
     if (raw) return JSON.parse(raw);
   } catch {
     /* fall through to defaults */
@@ -116,7 +117,7 @@ function loadExtData(): ExtendedDailyLifeData {
 }
 
 function saveExtData(data: ExtendedDailyLifeData) {
-  localStorage.setItem(EXT_KEY, JSON.stringify(data));
+  usSetItem(EXT_KEY, JSON.stringify(data));
   // Durable backup (debounced)
   void import("@/services/persistSync").then(({ schedulePlannerPersist }) => {
     schedulePlannerPersist();

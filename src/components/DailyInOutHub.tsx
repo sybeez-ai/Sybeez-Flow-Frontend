@@ -3,6 +3,7 @@
  * Create June / July folders → open folder → add In & Out transactions inside.
  */
 
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import {
   ArrowDownCircle,
@@ -79,7 +80,7 @@ function money(n: number): string {
 
 function readFolders(): string[] {
   try {
-    const raw = localStorage.getItem(FOLDERS_KEY);
+    const raw = usGetItem(FOLDERS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as string[]).filter(Boolean) : [];
@@ -90,7 +91,7 @@ function readFolders(): string[] {
 
 function writeFolders(keys: string[]) {
   const unique = Array.from(new Set(keys)).sort((a, b) => b.localeCompare(a));
-  localStorage.setItem(FOLDERS_KEY, JSON.stringify(unique));
+  usSetItem(FOLDERS_KEY, JSON.stringify(unique));
   return unique;
 }
 

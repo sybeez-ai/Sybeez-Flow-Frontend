@@ -29,6 +29,7 @@ import {
   saveLegalConsent,
   type ConsentKind,
 } from "@/services/regionService";
+import { hydrateFromBackend, notifyUserScopeChanged } from "@/services/persistSync";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -79,11 +80,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (isLocalToken(storedToken)) {
+        // Opaque local.* tokens are legacy — require re-login for signed JWT
+        if (import.meta.env.PROD || import.meta.env.VITE_APP_ENV === "production") {
+          clearSession();
+          if (!cancelled) {
+            setUser(null);
+            setToken(null);
+            setLoading(false);
+          }
+          return;
+        }
         if (!cancelled) {
           setUser(storedUser);
           setToken(storedToken);
           syncProfileToSettings(storedUser);
           setLoading(false);
+          void hydrateFromBackend();
         }
         return;
       }
@@ -95,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(storedToken);
         syncProfileToSettings(me);
         localStorage.setItem("sybeez_auth_user", JSON.stringify(me));
+        void hydrateFromBackend();
       } catch {
         if (cancelled) return;
         clearSession();
@@ -126,6 +139,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       syncProfileToSettings(session.user);
       setUser(session.user);
       setToken(session.access_token);
+      notifyUserScopeChanged();
+      void hydrateFromBackend();
 
       // On register: set currency / locale / consent from detected country
       if (opts?.isRegistration) {
@@ -200,8 +215,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithGoogle = useCallback(
     async (credential: string) => {
       const session = await exchangeGoogleCredential(credential);
-      // First Google session with no region yet → treat like registration
-      await applySession(session, { isRegistration: !getRegionProfile() });
+      persistSession(session);
+      const needsRegion = !getRegionProfile();
+      await applySession(session, { isRegistration: needsRegion });
     },
     [applySession],
   );
@@ -212,15 +228,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       expires_in?: number;
       user: AuthUser;
     }) => {
-      await applySession(session, { isRegistration: !getRegionProfile() });
+      persistSession(session as Parameters<typeof persistSession>[0]);
+      const needsRegion = !getRegionProfile();
+      await applySession(session, { isRegistration: needsRegion });
     },
     [applySession],
   );
 
   const signOut = useCallback(() => {
+    // Keep per-user data under u:<id>:… keys so the same user gets it back on next login.
     clearSession();
     setUser(null);
     setToken(null);
+    notifyUserScopeChanged();
   }, []);
 
   const value = useMemo(

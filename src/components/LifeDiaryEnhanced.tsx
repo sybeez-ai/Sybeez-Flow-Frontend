@@ -1,3 +1,4 @@
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -146,7 +147,7 @@ function normalizeDiaryData(raw: any): LifeDiaryData {
 
 function loadDiaryData(): LifeDiaryData {
   try {
-    const raw = localStorage.getItem(DIARY_KEY);
+    const raw = usGetItem(DIARY_KEY);
     if (raw) return normalizeDiaryData(JSON.parse(raw));
   } catch {
     /* fall through */
@@ -205,7 +206,7 @@ async function loadDiaryDataFromBackend(): Promise<LifeDiaryData | null> {
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
 function saveDiaryData(data: LifeDiaryData) {
-  localStorage.setItem(DIARY_KEY, JSON.stringify(data));
+  usSetItem(DIARY_KEY, JSON.stringify(data));
   try {
     window.dispatchEvent(new CustomEvent('sybeez:data-changed', { detail: { key: DIARY_KEY } }));
   } catch {
@@ -299,7 +300,7 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         if (remote) {
           const merged = mergeDiaryData(local, remote);
           setDataState(merged);
-          localStorage.setItem(DIARY_KEY, JSON.stringify(merged));
+          usSetItem(DIARY_KEY, JSON.stringify(merged));
           setIsConnected(true);
         } else {
           setIsConnected(false);

@@ -2,6 +2,7 @@
  * Apply LangGraph agent CRUD actions into localStorage so Finance / Planner UIs update.
  */
 
+import { usGetItem, usRemoveItem, usSetItem } from "@/services/userStorage";
 import { LifeManagementService } from "@/services/lifeManagement";
 import type { Transaction } from "@/types/lifeManagement";
 import {
@@ -35,6 +36,14 @@ export type AgentAction = {
   rule?: Record<string, unknown>;
   label?: Record<string, unknown>;
   events?: Array<Record<string, unknown>>;
+  message_id?: string;
+  account_email?: string;
+  draft_text?: string;
+  reply_text?: string;
+  to?: string;
+  subject?: string;
+  fill_reply_box?: boolean;
+  clear_draft?: boolean;
 };
 
 function notifyChanged(detail: { domains: string[] }) {
@@ -48,7 +57,7 @@ function notifyChanged(detail: { domains: string[] }) {
 
 function loadExt(): Record<string, unknown> {
   try {
-    const raw = localStorage.getItem(EXT_KEY);
+    const raw = usGetItem(EXT_KEY);
     if (raw) return JSON.parse(raw);
   } catch {
     /* fall through */
@@ -73,7 +82,7 @@ function loadExt(): Record<string, unknown> {
 }
 
 function saveExt(data: Record<string, unknown>) {
-  localStorage.setItem(EXT_KEY, JSON.stringify(data));
+  usSetItem(EXT_KEY, JSON.stringify(data));
 }
 
 function matchTxn(t: Transaction, match?: string, id?: string): boolean {
@@ -162,6 +171,32 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
       }
       if (action.type === "gmail_create_label" && action.ok) {
         applied.push("Label created");
+      }
+      if (action.type === "gmail_draft_reply" && action.ok && action.draft_text) {
+        try {
+          const draft = {
+            messageId: String(action.message_id || ""),
+            accountEmail: action.account_email ? String(action.account_email) : undefined,
+            draftText: String(action.draft_text),
+            from: action.to ? String(action.to) : undefined,
+            subject: action.subject ? String(action.subject) : undefined,
+          };
+          usSetItem("sybeez_gmail_draft_v1", JSON.stringify(draft));
+          window.dispatchEvent(
+            new CustomEvent("sybeez:gmail-draft-reply", { detail: draft }),
+          );
+        } catch {
+          /* ignore */
+        }
+        applied.push("Reply draft ready");
+      }
+      if (action.type === "gmail_send_reply" && action.ok) {
+        try {
+          usRemoveItem("sybeez_gmail_draft_v1");
+        } catch {
+          /* ignore */
+        }
+        applied.push("Reply sent");
       }
       if (action.notify_events || action.type === "gmail_list_events") {
         domains.add("gmail");

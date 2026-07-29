@@ -6,6 +6,7 @@
  *           Expense Charts (Week/Month/Year), Reports with Analytics, Net Worth Tracking
  */
 
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { 
   CreditCard, PiggyBank, TrendingUp, Shield, 
@@ -285,7 +286,7 @@ const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantPr
 
   // Load/save extra features from localStorage (never overwrite before hydrate)
   useEffect(() => {
-    const saved = localStorage.getItem("finance_extra_features");
+    const saved = usGetItem("finance_extra_features");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -304,7 +305,7 @@ const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantPr
   useEffect(() => {
     if (!extrasHydrated) return;
     const dataToSave = { creditScores, budgetCategories, debts, sideIncomes, assets };
-    localStorage.setItem("finance_extra_features", JSON.stringify(dataToSave));
+    usSetItem("finance_extra_features", JSON.stringify(dataToSave));
     // Sync dashboard extras to durable backend store
     import("@/services/persistSync").then(({ scheduleFinancePersist }) => {
       scheduleFinancePersist();

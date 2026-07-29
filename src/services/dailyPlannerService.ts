@@ -1,10 +1,12 @@
+import { authHeaders, currentUserId, usGetItem, usSetItem } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
 /**
  * Daily Planner API Service
  * Syncs local daily life data with backend RAG system
  */
 
-const DAILY_PLANNER_API_BASE = 'http://localhost:8000/api/daily-planner';
-const DEFAULT_USER_ID = 'default_user';
+const DAILY_PLANNER_API_BASE = `${getApiBase()}/api/daily-planner`;
+const DEFAULT_USER_ID = () => currentUserId() || 'anon';
 
 export class DailyPlannerService {
   
@@ -42,10 +44,10 @@ export class DailyPlannerService {
   static async syncDailyData(): Promise<void> {
     try {
       // Read from localStorage directly (where DailyLifePlanner stores data)
-      const tasksData = localStorage.getItem('daily_tasks');
-      const workoutsData = localStorage.getItem('gym_workouts');
-      const dietData = localStorage.getItem('diet_plan');
-      const waterData = localStorage.getItem('water_intake');
+      const tasksData = usGetItem("daily_tasks");
+      const workoutsData = usGetItem("gym_workouts");
+      const dietData = usGetItem("diet_plan");
+      const waterData = usGetItem("water_intake");
       
       const tasks = tasksData ? JSON.parse(tasksData) : [];
       const gymWorkouts = workoutsData ? JSON.parse(workoutsData) : [];
@@ -61,9 +63,9 @@ export class DailyPlannerService {
           try {
             await fetch(`${DAILY_PLANNER_API_BASE}/tasks`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: authHeaders(),
               body: JSON.stringify({
-                user_id: DEFAULT_USER_ID,
+                user_id: DEFAULT_USER_ID(),
                 title: task.title || 'Untitled Task',
                 description: '',
                 due_date: this.toISODateTime(today, task.time || '12:00'),
@@ -84,9 +86,9 @@ export class DailyPlannerService {
         try {
           await fetch(`${DAILY_PLANNER_API_BASE}/workouts`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({
-              user_id: DEFAULT_USER_ID,
+              user_id: DEFAULT_USER_ID(),
               workout_type: 'strength', // Most exercises are strength training
               duration: (workout.sets || 3) * 2, // Estimate: 2 min per set
               date: todayISO,
@@ -112,9 +114,9 @@ export class DailyPlannerService {
           
           await fetch(`${DAILY_PLANNER_API_BASE}/meals`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({
-              user_id: DEFAULT_USER_ID,
+              user_id: DEFAULT_USER_ID(),
               meal_type: mealType,
               calories: meal.calories || 500,
               date: this.toISODateTime(today, meal.time || '12:00'),
@@ -129,9 +131,9 @@ export class DailyPlannerService {
       
       // Sync water intake
       try {
-        await fetch(`${DAILY_PLANNER_API_BASE}/water/${DEFAULT_USER_ID}?glasses=${waterGlasses}&date=${today}`, {
+        await fetch(`${DAILY_PLANNER_API_BASE}/water/${DEFAULT_USER_ID()}?glasses=${waterGlasses}&date=${today}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
+          headers: authHeaders()
         });
       } catch (err) {
         console.warn('Failed to sync water:', err);
@@ -153,9 +155,9 @@ export class DailyPlannerService {
       
       const response = await fetch(`${DAILY_PLANNER_API_BASE}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
-          user_id: DEFAULT_USER_ID,
+          user_id: DEFAULT_USER_ID(),
           question: question,
           date: today
         })
@@ -180,7 +182,7 @@ export class DailyPlannerService {
       const targetDate = date || new Date().toISOString().split('T')[0];
       
       const response = await fetch(
-        `${DAILY_PLANNER_API_BASE}/snapshot/${DEFAULT_USER_ID}?date=${targetDate}`,
+        `${DAILY_PLANNER_API_BASE}/snapshot/${DEFAULT_USER_ID()}?date=${targetDate}`,
         { method: 'GET' }
       );
       
@@ -201,7 +203,7 @@ export class DailyPlannerService {
   static async getTasks(): Promise<any> {
     try {
       const response = await fetch(
-        `${DAILY_PLANNER_API_BASE}/tasks/${DEFAULT_USER_ID}`,
+        `${DAILY_PLANNER_API_BASE}/tasks/${DEFAULT_USER_ID()}`,
         { method: 'GET' }
       );
       

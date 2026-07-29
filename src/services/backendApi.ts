@@ -1,3 +1,5 @@
+import { authHeaders } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
 /**
  * Production API Client for Backend Integration
  * ============================================

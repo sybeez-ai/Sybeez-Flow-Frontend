@@ -1,4 +1,7 @@
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
+import { usGetJSON, usSetJSON } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
+
+const BACKEND_URL = getApiBase();
 
 export const AUTH_TOKEN_KEY = "sybeez_auth_token";
 export const AUTH_USER_KEY = "sybeez_auth_user";
@@ -107,15 +110,14 @@ export function clearSession(): void {
 
 export function syncProfileToSettings(user: AuthUser): void {
   try {
-    const raw = localStorage.getItem("sybeez_settings");
-    const settings = raw ? JSON.parse(raw) : {};
+    const settings = usGetJSON<Record<string, any>>("sybeez_settings", {});
     settings.account = {
       ...(settings.account || {}),
       displayName: user.name || settings.account?.displayName || "",
       email: user.email || settings.account?.email || "",
       avatar: user.picture || settings.account?.avatar || "",
     };
-    localStorage.setItem("sybeez_settings", JSON.stringify(settings));
+    usSetJSON("sybeez_settings", settings);
   } catch {
     // non-fatal
   }
@@ -255,42 +257,50 @@ export async function signUpLocal(input: {
     throw new Error("Verify your email with the OTP code before creating an account");
   }
 
-  // Confirm OTP verification with backend (one-time token)
-  const confirmRes = await fetch(`${BACKEND_URL}/api/auth/signup/confirm-email`, {
+  const res = await fetch(`${BACKEND_URL}/api/auth/local/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      name,
       email,
+      password,
       verification_token: input.verificationToken,
     }),
   });
-  if (!confirmRes.ok) {
-    const detail = await confirmRes.json().catch(() => ({}));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
     throw new Error(
-      typeof detail?.detail === "string"
-        ? detail.detail
-        : "Email verification expired. Send a new code.",
+      typeof data?.detail === "string"
+        ? data.detail
+        : "Could not create account. Try again.",
     );
   }
 
-  const accounts = readAccounts();
-  if (accounts.some((a) => a.email === email)) {
-    throw new Error("An account with this email already exists. Sign in instead.");
+  // Mirror account locally for offline display (password never stored in cleartext path after migrate)
+  try {
+    const salt = randomSalt();
+    const passwordHash = await hashPassword(password, salt);
+    const accounts = readAccounts().filter((a) => a.email !== email);
+    writeAccounts([
+      ...accounts,
+      {
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        salt,
+        passwordHash,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+  } catch {
+    /* ignore mirror failures */
   }
 
-  const salt = randomSalt();
-  const passwordHash = await hashPassword(password, salt);
-  const account: LocalAccount = {
-    id: `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    name,
-    email,
-    salt,
-    passwordHash,
-    createdAt: new Date().toISOString(),
+  return {
+    access_token: data.access_token,
+    expires_in: data.expires_in || 60 * 60 * 24 * 7,
+    user: data.user as AuthUser,
   };
-
-  writeAccounts([...accounts, account]);
-  return sessionFromAccount(account);
 }
 
 /** Request a signup OTP for the given email. */
@@ -350,17 +360,57 @@ export async function signInLocal(input: {
   if (!email) throw new Error("Enter your email");
   if (!password) throw new Error("Enter your password");
 
+  // Prefer server JWT login
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/auth/local/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        access_token: data.access_token,
+        expires_in: data.expires_in || 60 * 60 * 24 * 7,
+        user: data.user as AuthUser,
+      };
+    }
+  } catch {
+    /* fall through to migrate */
+  }
+
+  // Legacy browser-only account → migrate onto server, then JWT
   const account = readAccounts().find((a) => a.email === email);
   if (!account) {
     throw new Error("No account found for this email. Create one first.");
   }
-
   const passwordHash = await hashPassword(password, account.salt);
   if (passwordHash !== account.passwordHash) {
     throw new Error("Incorrect email or password");
   }
 
-  return sessionFromAccount(account);
+  const migrateRes = await fetch(`${BACKEND_URL}/api/auth/local/migrate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: account.name,
+      email: account.email,
+      password,
+    }),
+  });
+  const migrateData = await migrateRes.json().catch(() => ({}));
+  if (!migrateRes.ok) {
+    throw new Error(
+      typeof migrateData?.detail === "string"
+        ? migrateData.detail
+        : "Could not sign in. Try again.",
+    );
+  }
+  return {
+    access_token: migrateData.access_token,
+    expires_in: migrateData.expires_in || 60 * 60 * 24 * 7,
+    user: migrateData.user as AuthUser,
+  };
 }
 
 /** @deprecated Prefer signUpLocal / signInLocal */

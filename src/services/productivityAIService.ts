@@ -1,3 +1,4 @@
+import { usGetItem, usRemoveItem, usSetItem } from "@/services/userStorage";
 /**
  * Productivity AI Service - Claude Integration for Smart Coaching
  * Production-level implementation with context-aware AI assistance
@@ -46,7 +47,7 @@ class ProductivityAIService {
   setContext(context: AICoachingContext): void {
     this.context = context;
     // Load conversation history from localStorage
-    const saved = localStorage.getItem('ai_coaching_history');
+    const saved = usGetItem("ai_coaching_history");
     if (saved) {
       this.conversationHistory = JSON.parse(saved);
     }
@@ -58,7 +59,7 @@ class ProductivityAIService {
   private saveHistory(): void {
     // Keep last 50 messages
     const toSave = this.conversationHistory.slice(-50);
-    localStorage.setItem('ai_coaching_history', JSON.stringify(toSave));
+    usSetItem("ai_coaching_history", JSON.stringify(toSave));
   }
 
   /**
@@ -366,7 +367,7 @@ Provide:
    */
   clearHistory(): void {
     this.conversationHistory = [];
-    localStorage.removeItem('ai_coaching_history');
+    usRemoveItem("ai_coaching_history");
   }
 
   /**

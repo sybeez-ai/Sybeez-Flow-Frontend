@@ -1,30 +1,24 @@
 /**
  * Persist Finance / Planner dashboard data to localStorage + backend feature store.
  * LocalStorage remains the live source of truth; backend is durable backup.
+ * All sync requires a signed-in user — data is stored per user on the server.
  */
 
 import { LifeManagementService } from "@/services/lifeManagement";
+import { authHeaders, currentUserId, usGetJSON, usSetJSON } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = getApiBase();
 const EXT_KEY = "sybeez_extended_life_data";
 const FINANCE_EXTRA_KEY = "finance_extra_features";
-const LIFE_KEY = "life_management_data";
 
 /** Same-tab refresh signal for Finance / Planner / Home Dashboard */
 export const DATA_CHANGED_EVENT = "sybeez:data-changed";
+/** Fired when the signed-in user changes — UI should reload user-scoped state. */
+export const USER_SCOPE_CHANGED_EVENT = "sybeez:user-scope-changed";
 
 let financeTimer: ReturnType<typeof setTimeout> | null = null;
 let plannerTimer: ReturnType<typeof setTimeout> | null = null;
-
-function readJSON<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
 
 function hasMeaningfulFinance(data: Record<string, unknown> | null | undefined): boolean {
   if (!data || typeof data !== "object") return false;
@@ -53,10 +47,11 @@ function hasMeaningfulPlanner(data: Record<string, unknown> | null | undefined):
 }
 
 async function postJSON(path: string, body: unknown): Promise<boolean> {
+  if (!currentUserId()) return false;
   try {
     const res = await fetch(`${API_URL}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
       body: JSON.stringify(body),
     });
     return res.ok;
@@ -66,10 +61,11 @@ async function postJSON(path: string, body: unknown): Promise<boolean> {
 }
 
 async function getJSON<T>(path: string): Promise<T | null> {
+  if (!currentUserId()) return null;
   try {
     const res = await fetch(`${API_URL}${path}`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
     });
     if (!res.ok) return null;
     return (await res.json()) as T;
@@ -87,10 +83,15 @@ export function notifyDataChanged(domains: string[]) {
   }
 }
 
+export function notifyUserScopeChanged() {
+  window.dispatchEvent(new CustomEvent(USER_SCOPE_CHANGED_EVENT));
+  notifyDataChanged(["finance", "planner", "diary", "gmail", "home"]);
+}
+
 /** Build finance payload from current localStorage. */
 export function buildFinancePayload(): Record<string, unknown> {
   const life = LifeManagementService.getData();
-  const extras = readJSON(FINANCE_EXTRA_KEY, {});
+  const extras = usGetJSON(FINANCE_EXTRA_KEY, {});
   return {
     ...life,
     extras,
@@ -107,6 +108,7 @@ export function scheduleFinancePersist(delayMs = 400) {
 }
 
 export async function pushFinance(): Promise<boolean> {
+  if (!currentUserId()) return false;
   const payload = buildFinancePayload();
   return postJSON("/api/features/finance/data", payload);
 }
@@ -120,7 +122,8 @@ export function schedulePlannerPersist(delayMs = 400) {
 }
 
 export async function pushPlanner(): Promise<boolean> {
-  const planner = readJSON<Record<string, unknown>>(EXT_KEY, {});
+  if (!currentUserId()) return false;
+  const planner = usGetJSON<Record<string, unknown>>(EXT_KEY, {});
   return postJSON("/api/features/planner/data", {
     ...planner,
     updatedAt: new Date().toISOString(),
@@ -128,12 +131,15 @@ export async function pushPlanner(): Promise<boolean> {
 }
 
 /**
- * On app boot: if local is empty but backend has data, hydrate localStorage.
+ * On app boot / login: if local is empty but backend has this user's data, hydrate.
  * Never overwrite non-empty local with empty backend.
+ * Never hydrates without a signed-in user (prevents cross-user bleed).
  */
 export async function hydrateFromBackend(): Promise<void> {
+  if (!currentUserId()) return;
+
   const localLife = LifeManagementService.getData();
-  const localExtra = readJSON(FINANCE_EXTRA_KEY, null);
+  const localExtra = usGetJSON(FINANCE_EXTRA_KEY, null);
   const localFinanceEmpty =
     !(localLife.transactions?.length) &&
     !(localLife.subscriptions?.length) &&
@@ -150,37 +156,36 @@ export async function hydrateFromBackend(): Promise<void> {
         extras?: unknown;
         updatedAt?: string;
       };
-      localStorage.setItem(LIFE_KEY, JSON.stringify({
-        subscriptions: lifeRest.subscriptions || [],
-        emis: lifeRest.emis || [],
-        insurances: lifeRest.insurances || [],
-        bills: lifeRest.bills || [],
-        tasks: lifeRest.tasks || [],
-        meetings: lifeRest.meetings || [],
-        habits: lifeRest.habits || [],
-        reminders: lifeRest.reminders || [],
-        savingsPlans: lifeRest.savingsPlans || [],
-        savingsItems: lifeRest.savingsItems || [],
-        investments: lifeRest.investments || [],
-        creditCards: lifeRest.creditCards || [],
-        budgets: lifeRest.budgets || [],
-        transactions: lifeRest.transactions || [],
-      }));
+      LifeManagementService.saveData({
+        subscriptions: (lifeRest.subscriptions as never[]) || [],
+        emis: (lifeRest.emis as never[]) || [],
+        insurances: (lifeRest.insurances as never[]) || [],
+        bills: (lifeRest.bills as never[]) || [],
+        tasks: (lifeRest.tasks as never[]) || [],
+        meetings: (lifeRest.meetings as never[]) || [],
+        habits: (lifeRest.habits as never[]) || [],
+        reminders: (lifeRest.reminders as never[]) || [],
+        savingsPlans: (lifeRest.savingsPlans as never[]) || [],
+        savingsItems: (lifeRest.savingsItems as never[]) || [],
+        investments: (lifeRest.investments as never[]) || [],
+        creditCards: (lifeRest.creditCards as never[]) || [],
+        budgets: (lifeRest.budgets as never[]) || [],
+        transactions: (lifeRest.transactions as never[]) || [],
+      });
       if (extras && typeof extras === "object") {
-        localStorage.setItem(FINANCE_EXTRA_KEY, JSON.stringify(extras));
+        usSetJSON(FINANCE_EXTRA_KEY, extras);
       }
       notifyDataChanged(["finance"]);
     }
   } else {
-    // Keep local authoritative — push up so backend stays in sync
     void pushFinance();
   }
 
-  const localPlanner = readJSON<Record<string, unknown>>(EXT_KEY, {});
+  const localPlanner = usGetJSON<Record<string, unknown>>(EXT_KEY, {});
   if (!hasMeaningfulPlanner(localPlanner)) {
     const remote = await getJSON<Record<string, unknown>>("/api/features/planner/data");
     if (hasMeaningfulPlanner(remote)) {
-      localStorage.setItem(EXT_KEY, JSON.stringify(remote));
+      usSetJSON(EXT_KEY, remote);
       notifyDataChanged(["planner"]);
     }
   } else {

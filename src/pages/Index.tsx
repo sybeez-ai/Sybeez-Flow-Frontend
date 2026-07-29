@@ -1,3 +1,4 @@
+import { usGetItem, usSetItem } from "@/services/userStorage";
 import { useEffect, useState } from "react";
 import { Bot } from "lucide-react";
 import AppSidebar, { AppView } from "@/components/AppSidebar";
@@ -15,7 +16,7 @@ import { buildFinanceAssistantContextAsync } from "@/services/financeAssistantCo
 
 const readJSON = (key: string): unknown => {
   try {
-    return JSON.parse(localStorage.getItem(key) || "null");
+    return JSON.parse(usGetItem(key) || "null");
   } catch {
     return null;
   }
@@ -135,15 +136,18 @@ const DIARY_SUGGESTIONS = [
 
 const GMAIL_SYSTEM =
   "You are the Email Assistant inside Sybeez Flow with LIVE Gmail access. " +
-  "You can search the full mailbox, create labels, move mail, and save rules like " +
-  "'if mail from X move to label Y'. Also surface renewals/meetings so nothing is missed. " +
-  "Be concise and confirm what you changed.";
+  "The user may have multiple Gmail accounts — always use the active_account / account_email " +
+  "and the selected email's accountId so actions hit the correct inbox. " +
+  "You can search mail, create labels, organize mail with auto-filing rules " +
+  "(from sender or promotions category → label), draft replies, and send replies. " +
+  "When the user asks to reply, draft the reply in chat first — do not send until they confirm. " +
+  "Also surface renewals/meetings so nothing is missed. Be concise and confirm which account you used.";
 
 const GMAIL_SUGGESTIONS = [
   "Show my unread emails",
-  "Create label Bills",
+  "Move promotions to Promotions",
   "If mail from stripe.com move to Bills",
-  "Remind me about renewals and meetings",
+  "Organize my mail",
 ];
 
 const VIEW_KEY = "sybeez_active_view";
@@ -160,7 +164,7 @@ const VALID_VIEWS: AppView[] = [
 const Index = () => {
   const [view, setView] = useState<AppView>(() => {
     try {
-      const saved = localStorage.getItem(VIEW_KEY) as AppView | null;
+      const saved = usGetItem(VIEW_KEY) as AppView | null;
       if (saved && VALID_VIEWS.includes(saved)) return saved;
     } catch {
       /* ignore */
@@ -178,7 +182,7 @@ const Index = () => {
   // Persist active module (Finance Dashboard, Planner, …) across reloads
   useEffect(() => {
     try {
-      localStorage.setItem(VIEW_KEY, view);
+      usSetItem(VIEW_KEY, view);
     } catch {
       /* ignore */
     }
@@ -337,37 +341,76 @@ const Index = () => {
                 const gmail = readJSON("sybeez_gmail_data_v2") as {
                   accounts?: { email?: string }[];
                   emails?: Array<{
+                    id?: string;
                     from?: string;
                     subject?: string;
                     isRead?: boolean;
                     preview?: string;
+                    accountId?: string;
                   }>;
                   labels?: Array<{ id?: string; name?: string }>;
                 } | null;
+                const selected = readJSON("sybeez_gmail_selected_v1") as {
+                  id?: string;
+                  accountId?: string;
+                  from?: string;
+                  subject?: string;
+                  preview?: string;
+                  body?: string;
+                } | null;
+                const draftReply = readJSON("sybeez_gmail_draft_v1") as {
+                  messageId?: string;
+                  accountEmail?: string;
+                  draftText?: string;
+                  from?: string;
+                  subject?: string;
+                } | null;
+                let activeAccount = "all";
+                try {
+                  activeAccount = (
+                    usGetItem("sybeez_gmail_active_account_v1") || "all"
+                  ).toLowerCase();
+                } catch {
+                  /* ignore */
+                }
+                const accounts = Array.isArray(gmail?.accounts) ? gmail!.accounts! : [];
                 const accountEmail =
-                  gmail?.accounts?.find((a) => a.email)?.email ||
-                  (Array.isArray(gmail?.accounts) && gmail?.accounts[0]?.email) ||
+                  (activeAccount !== "all" && activeAccount) ||
+                  selected?.accountId ||
+                  accounts.find((a) => a.email)?.email ||
+                  accounts[0]?.email ||
                   undefined;
                 const emails = Array.isArray(gmail?.emails) ? gmail!.emails! : [];
-                const unread = emails.filter((e) => !e.isRead).length;
-                // Compact page snapshot so the bot can "see" the open inbox without oversized payloads
+                const scopedEmails =
+                  activeAccount === "all"
+                    ? emails
+                    : emails.filter(
+                        (e) => (e.accountId || "").toLowerCase() === activeAccount,
+                      );
+                const unread = scopedEmails.filter((e) => !e.isRead).length;
                 const page = {
                   tab: "inbox",
+                  active_account: activeAccount,
                   unread_count: unread,
                   labels: (gmail?.labels || []).map((l) => l.name).filter(Boolean).slice(0, 40),
-                  emails: emails.slice(0, 20).map((e) => ({
+                  emails: scopedEmails.slice(0, 20).map((e) => ({
+                    id: e.id,
                     from: e.from,
                     subject: e.subject,
                     isRead: e.isRead,
                     preview: (e.preview || "").slice(0, 100),
+                    accountId: e.accountId,
                   })),
                 };
                 return {
                   feature: "gmail",
                   account_email: accountEmail,
+                  active_account: activeAccount,
+                  selected_email: selected || undefined,
+                  draft_reply: draftReply || undefined,
                   page,
                   gmail: {
-                    accounts: gmail?.accounts || [],
+                    accounts: accounts,
                     labels: gmail?.labels || [],
                     emails: page.emails,
                   },

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Bot, Loader2, Plus, Sparkles, User, X } from "lucide-react";
+import { ArrowUp, Bot, Loader2, Plus, Send, Sparkles, User, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Textarea } from "@/components/ui/textarea";
 import { askAIDetailed } from "@/services/aiService";
 import { chatHistory } from "@/services/chatHistory";
 import { sanitizeAssistantText } from "@/services/financeChatFormat";
+import gmailApi from "@/services/gmailApi";
+import { toast } from "sonner";
 import {
   OPEN_CHAT_SESSION_EVENT,
   archiveChatSession,
@@ -15,10 +17,32 @@ import {
   type OpenChatSessionDetail,
 } from "@/services/chatSessionStore";
 import ChatHistoryPopover from "@/components/ChatHistoryPopover";
+import { currentUserId, usGetItem, usRemoveItem, usSetItem, userSessionId } from "@/services/userStorage";
+import { USER_SCOPE_CHANGED_EVENT } from "@/services/persistSync";
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+interface GmailDraft {
+  messageId: string;
+  accountEmail?: string;
+  draftText: string;
+  from?: string;
+  subject?: string;
+}
+
+function readGmailDraft(): GmailDraft | null {
+  try {
+    const raw = usGetItem("sybeez_gmail_draft_v1");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.messageId || !parsed?.draftText) return null;
+    return parsed as GmailDraft;
+  } catch {
+    return null;
+  }
 }
 
 export interface AssistantPanelProps {
@@ -51,15 +75,20 @@ const AssistantPanel = ({
 }: AssistantPanelProps) => {
   const [activeSessionId, setActiveSessionId] = useState(() => {
     try {
-      return localStorage.getItem(`sybeez_chat_sid_${baseSessionId}`) || baseSessionId;
+      const scopedBase = userSessionId(baseSessionId);
+      return localStorage.getItem(`sybeez_chat_sid_${scopedBase}`) || scopedBase;
     } catch {
-      return baseSessionId;
+      return userSessionId(baseSessionId);
     }
   });
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [gmailDraft, setGmailDraft] = useState<GmailDraft | null>(() =>
+    baseSessionId === "gmail-assistant" ? readGmailDraft() : null,
+  );
+  const [sendingReply, setSendingReply] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -73,7 +102,7 @@ const AssistantPanel = ({
   // Remember active thread so reload continues the same conversation
   useEffect(() => {
     try {
-      localStorage.setItem(`sybeez_chat_sid_${baseSessionId}`, activeSessionId);
+      localStorage.setItem(`sybeez_chat_sid_${userSessionId(baseSessionId)}`, activeSessionId.startsWith("u:") ? activeSessionId : userSessionId(activeSessionId));
     } catch {
       /* ignore */
     }
@@ -101,11 +130,29 @@ const AssistantPanel = ({
   useEffect(() => {
     // Only reset when the panel's base session type changes (e.g. finance → planner)
     try {
-      const saved = localStorage.getItem(`sybeez_chat_sid_${baseSessionId}`);
-      setActiveSessionId(saved || baseSessionId);
+      const scopedBase = userSessionId(baseSessionId);
+      const saved = localStorage.getItem(`sybeez_chat_sid_${scopedBase}`);
+      setActiveSessionId(saved || scopedBase);
     } catch {
-      setActiveSessionId(baseSessionId);
+      setActiveSessionId(userSessionId(baseSessionId));
     }
+  }, [baseSessionId]);
+
+  // When another user signs in, remount chat under that user's namespace
+  useEffect(() => {
+    const onScope = () => {
+      const scopedBase = userSessionId(baseSessionId);
+      try {
+        const saved = localStorage.getItem(`sybeez_chat_sid_${scopedBase}`);
+        setActiveSessionId(saved || scopedBase);
+      } catch {
+        setActiveSessionId(scopedBase);
+      }
+      setMessages([]);
+      setHydrated(false);
+    };
+    window.addEventListener(USER_SCOPE_CHANGED_EVENT, onScope);
+    return () => window.removeEventListener(USER_SCOPE_CHANGED_EVENT, onScope);
   }, [baseSessionId]);
 
   // Open a full chat thread from History sidebar
@@ -153,6 +200,19 @@ const AssistantPanel = ({
     resizeComposer();
   }, [input]);
 
+  // Keep Send button in sync when Email Assistant fills the draft
+  useEffect(() => {
+    if (baseSessionId !== "gmail-assistant") return;
+    const sync = () => setGmailDraft(readGmailDraft());
+    const onDraft = () => sync();
+    window.addEventListener("sybeez:gmail-draft-reply", onDraft);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("sybeez:gmail-draft-reply", onDraft);
+      window.removeEventListener("storage", sync);
+    };
+  }, [baseSessionId]);
+
   const startNewChat = async () => {
     // Keep prior messages in DB; open a fresh session id for the UI
     if (messages.length) {
@@ -194,7 +254,7 @@ const AssistantPanel = ({
         useWebSearch ||
         context.enableWebSearch === true ||
         context.feature === "finance";
-      const { text: reply } = await askAIDetailed(prompt, {
+      const { text: reply, actions } = await askAIDetailed(prompt, {
         system,
         sessionId: activeSessionId,
         history: nextHistory,
@@ -211,6 +271,25 @@ const AssistantPanel = ({
         { role: "assistant", content: safe },
       ];
       setMessages(withAssistant);
+      if (baseSessionId === "gmail-assistant") {
+        const draftAction = actions.find(
+          (a) => a.type === "gmail_draft_reply" && a.ok && a.draft_text,
+        );
+        if (draftAction) {
+          setGmailDraft({
+            messageId: String(draftAction.message_id || ""),
+            accountEmail: draftAction.account_email
+              ? String(draftAction.account_email)
+              : undefined,
+            draftText: String(draftAction.draft_text),
+            from: draftAction.to ? String(draftAction.to) : undefined,
+            subject: draftAction.subject ? String(draftAction.subject) : undefined,
+          });
+        }
+        if (actions.some((a) => a.type === "gmail_send_reply" && a.ok)) {
+          setGmailDraft(null);
+        }
+      }
       const threadTitle =
         (nextHistory.find((m) => m.role === "user")?.content || prompt).slice(0, 100);
       // Persist full thread (SQLite append-only)
@@ -232,6 +311,42 @@ const AssistantPanel = ({
       );
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const sendGmailDraft = async () => {
+    const draft = readGmailDraft() || gmailDraft;
+    if (!draft?.messageId || !draft.draftText?.trim() || sendingReply) return;
+    setSendingReply(true);
+    try {
+      await gmailApi.sendReply(
+        draft.messageId,
+        draft.draftText.trim(),
+        draft.accountEmail,
+      );
+      try {
+        usRemoveItem("sybeez_gmail_draft_v1");
+      } catch {
+        /* ignore */
+      }
+      setGmailDraft(null);
+      window.dispatchEvent(new CustomEvent("sybeez:gmail-refresh"));
+      toast.success("Reply sent", { position: "top-center", duration: 2000 });
+      const note: ChatMessage = {
+        role: "assistant",
+        content: `Reply sent${draft.from ? ` to ${draft.from}` : ""}.`,
+      };
+      setMessages((prev) => {
+        const next = [...prev, note];
+        void persistChatSession(activeSessionId, next, "Reply sent");
+        return next;
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send reply", {
+        position: "top-center",
+      });
+    } finally {
+      setSendingReply(false);
     }
   };
 
@@ -340,6 +455,23 @@ const AssistantPanel = ({
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Thinking…
                 </div>
+              </div>
+            )}
+            {baseSessionId === "gmail-assistant" && gmailDraft?.draftText && !isLoading && (
+              <div className="flex justify-start pl-9">
+                <button
+                  type="button"
+                  onClick={() => void sendGmailDraft()}
+                  disabled={sendingReply}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {sendingReply ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="h-3.5 w-3.5" />
+                  )}
+                  {sendingReply ? "Sending…" : "Send reply"}
+                </button>
               </div>
             )}
           </>

@@ -5,12 +5,14 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Mail, Trash2, Send, Plug, LogOut, X, Search, Inbox,
-  CheckCircle2, Star, Sparkles, Reply, Bell, RefreshCw, Loader2,
+  CheckCircle2, Star, Sparkles, Reply, Bell, RefreshCw, Loader2, FolderKanban,
+  Pause, Play,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import gmailApi, { type GmailEmail as ApiEmail, type GmailAccount } from "@/services/gmailApi";
 import { upsertNotification } from "@/services/notificationService";
+import { usGetItem, usRemoveItem, usSetItem } from "@/services/userStorage";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface Email {
@@ -20,6 +22,7 @@ interface Email {
   to: string;
   subject: string;
   preview: string;
+  body?: string;
   timestamp: string;
   isRead: boolean;
   isSpam: boolean;
@@ -50,6 +53,82 @@ interface GmailData {
 }
 
 const GMAIL_KEY = "sybeez_gmail_data_v2";
+const GMAIL_SELECTED_KEY = "sybeez_gmail_selected_v1";
+const GMAIL_DRAFT_KEY = "sybeez_gmail_draft_v1";
+const GMAIL_DRAFT_EVENT = "sybeez:gmail-draft-reply";
+const GMAIL_ACTIVE_ACCOUNT_KEY = "sybeez_gmail_active_account_v1";
+
+type AccountFilter = "all" | string;
+
+function loadActiveAccount(): AccountFilter {
+  try {
+    const raw = usGetItem(GMAIL_ACTIVE_ACCOUNT_KEY);
+    if (!raw) return "all";
+    return raw === "all" ? "all" : raw.toLowerCase();
+  } catch {
+    return "all";
+  }
+}
+
+function persistActiveAccount(id: AccountFilter) {
+  try {
+    usSetItem(GMAIL_ACTIVE_ACCOUNT_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+function accountShort(email: string): string {
+  const e = (email || "").trim();
+  if (!e) return "account";
+  const at = e.indexOf("@");
+  if (at <= 0) return e;
+  const local = e.slice(0, at);
+  const domain = e.slice(at + 1);
+  if (local.length <= 12) return e;
+  return `${local.slice(0, 10)}…@${domain}`;
+}
+
+function persistSelected(email: Email | null) {
+  try {
+    if (!email) {
+      usRemoveItem(GMAIL_SELECTED_KEY);
+      return;
+    }
+    usSetItem(
+      GMAIL_SELECTED_KEY,
+      JSON.stringify({
+        id: email.id,
+        accountId: email.accountId,
+        from: email.from,
+        to: email.to,
+        subject: email.subject,
+        preview: (email.preview || "").slice(0, 300),
+        body: (email.body || email.preview || "").slice(0, 4000),
+      }),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistDraft(draft: {
+  messageId: string;
+  accountEmail?: string;
+  draftText: string;
+  from?: string;
+  subject?: string;
+} | null) {
+  try {
+    if (!draft) {
+      usRemoveItem(GMAIL_DRAFT_KEY);
+      return;
+    }
+    usSetItem(GMAIL_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    /* ignore */
+  }
+}
 
 function categorize(subject: string, from: string): Email["category"] {
   const s = `${subject} ${from}`.toLowerCase();
@@ -86,7 +165,7 @@ function mapApiEmail(e: ApiEmail): Email {
 
 function loadLocalCache(): Partial<GmailData> {
   try {
-    const raw = localStorage.getItem(GMAIL_KEY);
+    const raw = usGetItem(GMAIL_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return {
@@ -108,7 +187,7 @@ function loadLocalSettings(): { notificationsEnabled: boolean } {
 
 function persistCache(data: GmailData) {
   try {
-    localStorage.setItem(GMAIL_KEY, JSON.stringify(data));
+    usSetItem(GMAIL_KEY, JSON.stringify(data));
   } catch {
     /* ignore */
   }
@@ -141,7 +220,20 @@ const timeLabel = (iso: string) => {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 };
 
-type TabId = "inbox" | "accounts" | "clean";
+type TabId = "inbox" | "organize" | "accounts" | "clean";
+
+interface OrgRule {
+  id: string;
+  account_email?: string | null;
+  match_type?: string;
+  match_value?: string;
+  from_email?: string;
+  label_name: string;
+  remove_inbox?: boolean;
+  enabled?: boolean;
+  applied_count?: number;
+  last_applied_at?: string | null;
+}
 
 interface GmailIntegrationSidebarProps {
   onClose: () => void;
@@ -159,16 +251,28 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
   const [accounts, setAccounts] = useState<EmailAccount[]>(() => cached.accounts || []);
   const [emails, setEmails] = useState<Email[]>(() => cached.emails || []);
   const [cleanEmails, setCleanEmails] = useState<Email[]>([]);
+  const [orgRules, setOrgRules] = useState<OrgRule[]>([]);
   const [labels, setLabels] = useState<GmailLabel[]>(() => cached.labels || []);
   const [settings] = useState(loadLocalSettings);
   const [activeTab, setActiveTab] = useState<TabId>("inbox");
+  const [activeAccount, setActiveAccount] = useState<AccountFilter>(() => loadActiveAccount());
   const [searchTerm, setSearchTerm] = useState("");
   const [importantOnly, setImportantOnly] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
+  const [bodyLoadingId, setBodyLoadingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(() => !(cached.emails && cached.emails.length > 0));
   const [cleanLoading, setCleanLoading] = useState(false);
+  const [orgLoading, setOrgLoading] = useState(false);
+  const [orgSaving, setOrgSaving] = useState(false);
+  const [orgApplying, setOrgApplying] = useState(false);
+  const [orgRuleBusyId, setOrgRuleBusyId] = useState<string | null>(null);
+  const [ruleMatchType, setRuleMatchType] = useState<"from" | "category">("from");
+  const [ruleMatchValue, setRuleMatchValue] = useState("");
+  const [ruleLabel, setRuleLabel] = useState("");
+  const [ruleRemoveInbox, setRuleRemoveInbox] = useState(true);
+  const [labelPickerOpen, setLabelPickerOpen] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [cleaning, setCleaning] = useState(false);
@@ -176,6 +280,14 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
   const hadCacheRef = useRef(Boolean(cached.emails?.length || cached.accounts?.length));
   const labelsRef = useRef(labels);
   labelsRef.current = labels;
+  const activeAccountRef = useRef(activeAccount);
+  activeAccountRef.current = activeAccount;
+  const lastAutoApplyKeyRef = useRef<string>("");
+
+  const selectAccount = useCallback((id: AccountFilter) => {
+    setActiveAccount(id);
+    persistActiveAccount(id);
+  }, []);
 
   const syncCache = useCallback(
     (nextAccounts: EmailAccount[], nextEmails: Email[], nextLabels?: GmailLabel[]) => {
@@ -215,7 +327,13 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
         return;
       }
 
-      // Everyday inbox first — small page, no labels on the critical path
+      // Keep account filter valid after disconnect
+      const current = activeAccountRef.current;
+      if (current !== "all" && !mappedAccounts.some((a) => a.id === current)) {
+        selectAccount("all");
+      }
+
+      // Everyday inbox — all accounts (UI filters by selected account)
       const apiEmails = await gmailApi.getEmails(25);
       const mappedEmails = apiEmails.map(mapApiEmail);
       setEmails(mappedEmails);
@@ -223,9 +341,12 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
       syncCache(mappedAccounts, mappedEmails);
       setLoading(false);
 
-      // Labels in background (not required to show mail)
+      // Labels for the active account (or first connected)
+      const labelAccount =
+        (activeAccountRef.current !== "all" && activeAccountRef.current) ||
+        mappedAccounts[0]?.email;
       void gmailApi
-        .getLabels()
+        .getLabels(labelAccount)
         .then((labelsRes) => {
           const mappedLabels: GmailLabel[] = (
             (labelsRes?.labels || []) as Array<{ id?: string; name?: string; type?: string }>
@@ -268,7 +389,7 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
       setLoading(false);
       setRefreshing(false);
     }
-  }, [settings.notificationsEnabled, syncCache]);
+  }, [settings.notificationsEnabled, syncCache, selectAccount]);
 
   const loadCleanList = useCallback(async () => {
     if (accounts.length === 0) {
@@ -277,7 +398,8 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
     }
     setCleanLoading(true);
     try {
-      const res = await gmailApi.listCleanEmails(200);
+      const accountEmail = activeAccount === "all" ? undefined : activeAccount;
+      const res = await gmailApi.listCleanEmails(200, accountEmail);
       setCleanEmails((res.emails || []).map(mapApiEmail));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load clean list", {
@@ -286,7 +408,68 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
     } finally {
       setCleanLoading(false);
     }
-  }, [accounts.length]);
+  }, [accounts.length, activeAccount]);
+
+  const loadOrgRules = useCallback(async () => {
+    if (accounts.length === 0) {
+      setOrgRules([]);
+      return;
+    }
+    setOrgLoading(true);
+    try {
+      const accountEmail = activeAccount === "all" ? undefined : activeAccount;
+      const res = await gmailApi.listRules(accountEmail);
+      setOrgRules((res.rules || []) as OrgRule[]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load organize rules", {
+        position: "top-center",
+      });
+    } finally {
+      setOrgLoading(false);
+    }
+  }, [accounts.length, activeAccount]);
+
+  const refreshLabels = useCallback(async (accountEmail?: string) => {
+    const target =
+      accountEmail ||
+      (activeAccount !== "all" ? activeAccount : accounts[0]?.email);
+    if (!target) return;
+    try {
+      const labelsRes = await gmailApi.getLabels(target);
+      const mappedLabels: GmailLabel[] = (
+        (labelsRes?.labels || []) as Array<{ id?: string; name?: string; type?: string }>
+      )
+        .filter((l) => l.type === "user" && l.name && l.id)
+        .map((l) => ({ id: String(l.id), name: String(l.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setLabels(mappedLabels);
+    } catch {
+      /* ignore */
+    }
+  }, [activeAccount, accounts]);
+
+  const applyOrgRulesQuiet = useCallback(async () => {
+    if (accounts.length === 0) return;
+    const key = `${activeAccount}|${accounts.map((a) => a.id).join(",")}`;
+    // Avoid spamming apply on every callback identity change
+    if (lastAutoApplyKeyRef.current === key) return;
+    lastAutoApplyKeyRef.current = key;
+    try {
+      const accountEmail = activeAccount === "all" ? undefined : activeAccount;
+      const res = await gmailApi.applyRules(accountEmail);
+      const moved = Number(res?.applied || 0);
+      if (moved > 0) {
+        toast.success(`Organized ${moved} email${moved === 1 ? "" : "s"} into labels`, {
+          position: "top-center",
+          duration: 2500,
+        });
+        void loadFromBackend({ quiet: true });
+        void loadOrgRules();
+      }
+    } catch {
+      /* quiet — rules may be empty */
+    }
+  }, [accounts, activeAccount, loadFromBackend, loadOrgRules]);
 
   useEffect(() => {
     void loadFromBackend();
@@ -296,7 +479,57 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
     if (activeTab === "clean") {
       void loadCleanList();
     }
-  }, [activeTab, loadCleanList]);
+    if (activeTab === "organize") {
+      void loadOrgRules();
+      void refreshLabels();
+    }
+  }, [activeTab, loadCleanList, loadOrgRules, activeAccount, refreshLabels]);
+
+  // Auto-apply when accounts / account filter ready (once per key)
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    const t = window.setTimeout(() => {
+      void applyOrgRulesQuiet();
+    }, 1800);
+    return () => window.clearTimeout(t);
+  }, [accounts.length, activeAccount, applyOrgRulesQuiet]);
+
+  // When user opens Organize, force one fresh apply pass
+  useEffect(() => {
+    if (activeTab !== "organize" || accounts.length === 0) return;
+    lastAutoApplyKeyRef.current = "";
+    const t = window.setTimeout(() => {
+      void applyOrgRulesQuiet();
+    }, 300);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on tab enter / account
+  }, [activeTab, activeAccount, accounts.length]);
+  // Reload labels when switching which account is active
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    const labelAccount =
+      (activeAccount !== "all" && activeAccount) || accounts[0]?.email;
+    if (!labelAccount) return;
+    let cancelled = false;
+    void gmailApi
+      .getLabels(labelAccount)
+      .then((labelsRes) => {
+        if (cancelled) return;
+        const mappedLabels: GmailLabel[] = (
+          (labelsRes?.labels || []) as Array<{ id?: string; name?: string; type?: string }>
+        )
+          .filter((l) => l.type === "user" && l.name && l.id)
+          .map((l) => ({ id: String(l.id), name: String(l.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setLabels(mappedLabels);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAccount, accounts]);
 
   // Refresh when Email Assistant creates labels / rules / moves mail
   useEffect(() => {
@@ -423,6 +656,88 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
     }
   };
 
+  const openEmail = async (email: Email) => {
+    const nextExpanded = expandedId === email.id ? null : email.id;
+    setExpandedId(nextExpanded);
+    if (!nextExpanded) {
+      persistSelected(null);
+      return;
+    }
+    void markRead(email.id);
+    persistSelected(email);
+
+    if (email.body && email.body.length > (email.preview || "").length) {
+      return;
+    }
+
+    setBodyLoadingId(email.id);
+    try {
+      const full = await gmailApi.getEmail(email.id, email.accountId);
+      const body = (full.body || full.preview || "").trim();
+      setEmails((prev) =>
+        prev.map((e) =>
+          e.id === email.id
+            ? {
+                ...e,
+                body: body || e.preview,
+                preview: e.preview || full.preview || body,
+                summary: body.slice(0, 280) || e.summary,
+                from: full.from_email || e.from,
+                to: full.to || e.to,
+                subject: full.subject || e.subject,
+              }
+            : e,
+        ),
+      );
+      persistSelected({
+        ...email,
+        body: body || email.preview,
+        from: full.from_email || email.from,
+        to: full.to || email.to,
+        subject: full.subject || email.subject,
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open email", {
+        position: "top-center",
+      });
+    } finally {
+      setBodyLoadingId(null);
+    }
+  };
+
+  // Email Assistant drafts → fill reply box (same draft, editable here)
+  useEffect(() => {
+    const onDraft = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        messageId?: string;
+        accountEmail?: string;
+        draftText?: string;
+        from?: string;
+        subject?: string;
+      }>).detail;
+      const messageId = detail?.messageId;
+      const draftText = (detail?.draftText || "").trim();
+      if (!messageId || !draftText) return;
+
+      persistDraft({
+        messageId,
+        accountEmail: detail.accountEmail,
+        draftText,
+        from: detail.from,
+        subject: detail.subject,
+      });
+
+      setExpandedId(messageId);
+      setReplyingId(messageId);
+      setReplyText(draftText);
+
+      const existing = emails.find((x) => x.id === messageId);
+      if (existing) persistSelected(existing);
+    };
+    window.addEventListener(GMAIL_DRAFT_EVENT, onDraft);
+    return () => window.removeEventListener(GMAIL_DRAFT_EVENT, onDraft);
+  }, [emails]);
+
   const toggleImportant = (id: string) =>
     setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, important: !e.important } : e)));
 
@@ -432,7 +747,10 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
     if (expandedId === id) setExpandedId(null);
     try {
       if (email) await gmailApi.deleteEmail(id, email.accountId);
-      toast.success("Email deleted", { position: "top-center", duration: 1500 });
+      toast.success(`Deleted from ${email?.accountId || "Gmail"}`, {
+        position: "top-center",
+        duration: 1500,
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Delete failed", { position: "top-center" });
       void loadFromBackend({ quiet: true });
@@ -441,32 +759,53 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
 
   const cleanInbox = async () => {
     if (cleaning) return;
-    const count = cleanEmails.length;
+    const scoped = cleanEmails.filter(
+      (e) => activeAccount === "all" || e.accountId === activeAccount,
+    );
+    const count = scoped.length;
+    const scopeLabel = activeAccount === "all" ? "all connected accounts" : activeAccount;
     const ok = window.confirm(
       count > 0
-        ? `Delete all ${count} listed promotional / spam / newsletter emails?\n\nThey go to Gmail Trash for 30 days.`
-        : "Delete ALL promotional, spam, and newsletter mail from Gmail?\n\nMessages go to Gmail Trash for 30 days.",
+        ? `Delete ${count} promotional / spam / newsletter email${count === 1 ? "" : "s"} from ${scopeLabel}?\n\nThey go to Gmail Trash for 30 days.`
+        : `Delete ALL promotional, spam, and newsletter mail from ${scopeLabel}?\n\nMessages go to Gmail Trash for 30 days.`,
     );
     if (!ok) return;
 
     setCleaning(true);
-    toast.info("Deleting unwanted mail…", { position: "top-center", duration: 2500 });
+    toast.info(
+      activeAccount === "all"
+        ? "Deleting unwanted mail across accounts…"
+        : `Deleting unwanted mail from ${activeAccount}…`,
+      { position: "top-center", duration: 2500 },
+    );
     try {
-      const result = await gmailApi.cleanUnwanted(1000);
+      const accountEmail = activeAccount === "all" ? undefined : activeAccount;
+      const result = await gmailApi.cleanUnwanted(1000, accountEmail);
       const deleted = result.deleted || 0;
-      setCleanEmails([]);
+      setCleanEmails((prev) =>
+        accountEmail ? prev.filter((e) => e.accountId !== accountEmail) : [],
+      );
       setEmails((prev) =>
-        prev.filter((e) => !e.isSpam && e.category !== "promo" && e.category !== "social"),
+        prev.filter((e) => {
+          if (accountEmail && e.accountId !== accountEmail) return true;
+          return !e.isSpam && e.category !== "promo" && e.category !== "social";
+        }),
       );
       if (deleted === 0) {
-        toast.info("No promotional or spam mail found to clean", {
+        toast.info(`No promotional or spam mail found for ${scopeLabel}`, {
           position: "top-center",
           duration: 2500,
         });
       } else {
+        const breakdown = (result.accounts || [])
+          .filter((a) => (a.deleted || 0) > 0)
+          .map((a) => `${a.deleted} · ${a.account}`)
+          .join(" · ");
         toast.success(
-          `Deleted ${deleted} unwanted message${deleted === 1 ? "" : "s"}`,
-          { position: "top-center", duration: 4000 },
+          breakdown
+            ? `Deleted ${deleted} unwanted message${deleted === 1 ? "" : "s"} (${breakdown})`
+            : `Deleted ${deleted} unwanted message${deleted === 1 ? "" : "s"} from ${scopeLabel}`,
+          { position: "top-center", duration: 4500 },
         );
       }
       void loadFromBackend({ quiet: true });
@@ -490,9 +829,13 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
       setEmails((prev) =>
         prev.map((e) => (e.id === email.id ? { ...e, replied: true, isRead: true } : e)),
       );
-      toast.success(`Reply sent to ${email.from}`, { position: "top-center", duration: 2000 });
+      toast.success(`Reply sent via ${email.accountId} → ${email.from}`, {
+        position: "top-center",
+        duration: 2200,
+      });
       setReplyingId(null);
       setReplyText("");
+      persistDraft(null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Reply failed", { position: "top-center" });
     }
@@ -503,11 +846,17 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
     [accounts],
   );
 
+  const matchesActiveAccount = useCallback(
+    (accountId: string) => activeAccount === "all" || accountId === activeAccount,
+    [activeAccount],
+  );
+
   const groupedEmails = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     // Inbox = everyday mail only (promotions/spam live on Clean tab)
     const filtered = emails
       .filter((e) => connectedAccountIds.size === 0 || connectedAccountIds.has(e.accountId))
+      .filter((e) => matchesActiveAccount(e.accountId))
       .filter((e) => !e.isSpam && e.category !== "promo" && e.category !== "social")
       .filter((e) => !importantOnly || e.important)
       .filter(
@@ -515,7 +864,8 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
           !q ||
           e.subject.toLowerCase().includes(q) ||
           e.from.toLowerCase().includes(q) ||
-          e.preview.toLowerCase().includes(q),
+          e.preview.toLowerCase().includes(q) ||
+          e.accountId.toLowerCase().includes(q),
       )
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
@@ -527,12 +877,344 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
       else groups.push({ label, emails: [email] });
     }
     return groups;
-  }, [emails, connectedAccountIds, importantOnly, searchTerm]);
+  }, [emails, connectedAccountIds, matchesActiveAccount, importantOnly, searchTerm]);
+
+  const visibleCleanEmails = useMemo(
+    () => cleanEmails.filter((e) => matchesActiveAccount(e.accountId)),
+    [cleanEmails, matchesActiveAccount],
+  );
 
   const unreadCount = emails.filter(
-    (e) => !e.isRead && !e.isSpam && e.category !== "promo" && e.category !== "social",
+    (e) =>
+      !e.isRead &&
+      !e.isSpam &&
+      e.category !== "promo" &&
+      e.category !== "social" &&
+      matchesActiveAccount(e.accountId),
   ).length;
   const connectedCount = accounts.filter((a) => a.connected).length;
+
+  const viewingLabel =
+    activeAccount === "all"
+      ? connectedCount > 1
+        ? "All accounts"
+        : accounts[0]?.email || "Gmail"
+      : activeAccount;
+
+  const ruleAccountEmail =
+    activeAccount === "all" ? accounts[0]?.email : activeAccount;
+
+  const visibleOrgRules = useMemo(() => {
+    const filtered =
+      activeAccount === "all"
+        ? orgRules
+        : orgRules.filter(
+            (r) =>
+              !r.account_email ||
+              r.account_email === activeAccount ||
+              r.account_email === "*",
+          );
+    return [...filtered].sort((a, b) => {
+      const ae = a.enabled === false ? 1 : 0;
+      const be = b.enabled === false ? 1 : 0;
+      if (ae !== be) return ae - be;
+      return String(b.label_name || "").localeCompare(String(a.label_name || ""));
+    });
+  }, [orgRules, activeAccount]);
+
+  const saveOrgRule = async () => {
+    const label = ruleLabel.trim();
+    const value =
+      ruleMatchType === "category"
+        ? (ruleMatchValue.trim() || "promotions")
+        : ruleMatchValue.trim();
+    if (!label) {
+      toast.error("Enter or select a label", { position: "top-center" });
+      return;
+    }
+    if (ruleMatchType === "from" && !value) {
+      toast.error("Enter a sender email or domain", { position: "top-center" });
+      return;
+    }
+    const targets =
+      activeAccount === "all"
+        ? accounts.filter((a) => a.connected).map((a) => a.email)
+        : ruleAccountEmail
+          ? [ruleAccountEmail]
+          : [];
+    if (targets.length === 0) {
+      toast.error("Connect a Gmail account first", { position: "top-center" });
+      return;
+    }
+    setOrgSaving(true);
+    try {
+      let totalMoved = 0;
+      const createdNew = !labels.some(
+        (l) => l.name.toLowerCase() === label.toLowerCase(),
+      );
+      for (const acc of targets) {
+        try {
+          await gmailApi.createLabel(label, acc);
+        } catch {
+          /* label may already exist */
+        }
+        const result = await gmailApi.upsertRule({
+          match_type: ruleMatchType,
+          match_value: value,
+          from_email: ruleMatchType === "from" ? value : undefined,
+          label_name: label,
+          account_email: acc,
+          remove_inbox: ruleRemoveInbox,
+          apply_now: true,
+          enabled: true,
+        });
+        totalMoved += Number(result?.applied?.applied || 0);
+      }
+      lastAutoApplyKeyRef.current = "";
+      const scope =
+        targets.length > 1 ? `${targets.length} accounts` : targets[0];
+      toast.success(
+        totalMoved > 0
+          ? `“${label}” ready on ${scope} · moved ${totalMoved} existing · future mail follows`
+          : createdNew
+            ? `Created “${label}” on ${scope} · future matching mail will move there`
+            : `Rule saved on ${scope} · future matching mail → “${label}”`,
+        { position: "top-center", duration: 3500 },
+      );
+      setRuleMatchValue("");
+      setRuleLabel("");
+      setLabelPickerOpen(false);
+      void loadOrgRules();
+      void loadFromBackend({ quiet: true });
+      void refreshLabels(targets[0]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save rule", {
+        position: "top-center",
+      });
+    } finally {
+      setOrgSaving(false);
+    }
+  };
+
+  const quickPromoRule = async () => {
+    setRuleMatchType("category");
+    setRuleMatchValue("promotions");
+    setRuleRemoveInbox(true);
+    const label = ruleLabel.trim() || "Promotions";
+    setRuleLabel(label);
+    const targets =
+      activeAccount === "all"
+        ? accounts.filter((a) => a.connected).map((a) => a.email)
+        : ruleAccountEmail
+          ? [ruleAccountEmail]
+          : [];
+    if (targets.length === 0) {
+      toast.error("Connect a Gmail account first", { position: "top-center" });
+      return;
+    }
+    setOrgSaving(true);
+    try {
+      let totalMoved = 0;
+      for (const acc of targets) {
+        try {
+          await gmailApi.createLabel(label, acc);
+        } catch {
+          /* ignore */
+        }
+        const result = await gmailApi.upsertRule({
+          match_type: "category",
+          match_value: "promotions",
+          label_name: label,
+          account_email: acc,
+          remove_inbox: true,
+          apply_now: true,
+          enabled: true,
+        });
+        totalMoved += Number(result?.applied?.applied || 0);
+      }
+      lastAutoApplyKeyRef.current = "";
+      toast.success(
+        totalMoved > 0
+          ? `Promotions → “${label}” · moved ${totalMoved}`
+          : `Promotions → “${label}” (new + future mail)`,
+        { position: "top-center", duration: 3000 },
+      );
+      void loadOrgRules();
+      void loadFromBackend({ quiet: true });
+      void refreshLabels(targets[0]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save promo rule", {
+        position: "top-center",
+      });
+    } finally {
+      setOrgSaving(false);
+    }
+  };
+
+  const removeOrgRule = async (id: string) => {
+    setOrgRuleBusyId(id);
+    try {
+      await gmailApi.deleteRule(id);
+      setOrgRules((prev) => prev.filter((r) => r.id !== id));
+      toast.success("Rule removed", { position: "top-center", duration: 1500 });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed", {
+        position: "top-center",
+      });
+    } finally {
+      setOrgRuleBusyId(null);
+    }
+  };
+
+  const toggleOrgRule = async (rule: OrgRule) => {
+    setOrgRuleBusyId(rule.id);
+    const nextEnabled = rule.enabled === false;
+    try {
+      const res = await gmailApi.patchRule(rule.id, { enabled: nextEnabled });
+      const updated = res?.rule as OrgRule | undefined;
+      setOrgRules((prev) =>
+        prev.map((r) =>
+          r.id === rule.id
+            ? { ...r, ...(updated || {}), enabled: nextEnabled }
+            : r,
+        ),
+      );
+      toast.success(
+        nextEnabled ? "Rule active again" : "Rule paused",
+        { position: "top-center", duration: 1500 },
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update rule", {
+        position: "top-center",
+      });
+    } finally {
+      setOrgRuleBusyId(null);
+    }
+  };
+
+  const applyOneOrgRule = async (rule: OrgRule) => {
+    if (rule.enabled === false) {
+      toast.error("Resume the rule before applying", { position: "top-center" });
+      return;
+    }
+    setOrgRuleBusyId(rule.id);
+    try {
+      const accountEmail = rule.account_email || (activeAccount === "all" ? undefined : activeAccount);
+      const res = await gmailApi.applyRules(accountEmail || undefined, rule.id);
+      const moved = Number(res?.applied || 0);
+      toast.success(
+        moved > 0
+          ? `Moved ${moved} → “${rule.label_name}”`
+          : `No new matches for “${rule.label_name}”`,
+        { position: "top-center", duration: 2500 },
+      );
+      void loadOrgRules();
+      void loadFromBackend({ quiet: true });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Apply failed", {
+        position: "top-center",
+      });
+    } finally {
+      setOrgRuleBusyId(null);
+    }
+  };
+
+  const applyAllOrgRules = async () => {
+    if (orgApplying) return;
+    const activeCount = visibleOrgRules.filter((r) => r.enabled !== false).length;
+    if (activeCount === 0) {
+      toast.error("No active rules to apply", { position: "top-center" });
+      return;
+    }
+    setOrgApplying(true);
+    try {
+      const accountEmail = activeAccount === "all" ? undefined : activeAccount;
+      const res = await gmailApi.applyRules(accountEmail);
+      const moved = Number(res?.applied || 0);
+      toast.success(
+        moved > 0
+          ? `Organized ${moved} email${moved === 1 ? "" : "s"} into labels`
+          : "No matching mail to organize right now",
+        { position: "top-center", duration: 2800 },
+      );
+      void loadOrgRules();
+      void loadFromBackend({ quiet: true });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Apply failed", {
+        position: "top-center",
+      });
+    } finally {
+      setOrgApplying(false);
+    }
+  };
+
+  const ruleSourceLabel = (rule: OrgRule) => {
+    const mtype = rule.match_type || "from";
+    const mval = rule.match_value || rule.from_email || "";
+    if (mtype === "category") {
+      const pretty =
+        mval === "promotions"
+          ? "Promotions"
+          : mval === "social"
+            ? "Social"
+            : mval === "updates"
+              ? "Updates"
+              : mval === "forums"
+                ? "Forums"
+                : mval;
+      return `Category · ${pretty}`;
+    }
+    if (mtype === "query") return `Query · ${mval}`;
+    return `From · ${mval}`;
+  };
+
+  const renderAccountSwitcher = () => {
+    if (accounts.length === 0) return null;
+    return (
+      <div className="rounded-lg border border-border/60 bg-muted/10 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Account
+          </p>
+          <span className="text-[10px] text-muted-foreground truncate max-w-[60%]">
+            Viewing {viewingLabel}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {accounts.length > 1 && (
+            <button
+              type="button"
+              onClick={() => selectAccount("all")}
+              className={cn(
+                "inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                activeAccount === "all"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border/70 bg-background/60 text-foreground hover:border-foreground/40",
+              )}
+            >
+              All accounts
+            </button>
+          )}
+          {accounts.map((acc) => (
+            <button
+              key={acc.id}
+              type="button"
+              onClick={() => selectAccount(acc.id)}
+              title={acc.email}
+              className={cn(
+                "inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                activeAccount === acc.id
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border/70 bg-background/60 text-foreground hover:border-foreground/40",
+              )}
+            >
+              {accountShort(acc.email)}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const renderAccounts = () => (
     <div className="space-y-4 max-w-xl">
@@ -599,20 +1281,36 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
                   {acc.connected ? (
                     <>
                       <CheckCircle2 className="h-3 w-3" /> Connected · live inbox
+                      {activeAccount === acc.id ? " · viewing" : ""}
                     </>
                   ) : (
                     "Disconnected"
                   )}
                 </p>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => removeAccount(acc.id)}
-              >
-                <LogOut className="h-3.5 w-3.5 mr-1" /> Disconnect
-              </Button>
+              <div className="flex items-center gap-1 shrink-0">
+                {acc.connected && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => {
+                      selectAccount(acc.id);
+                      setActiveTab("inbox");
+                    }}
+                  >
+                    <Inbox className="h-3.5 w-3.5 mr-1" /> Inbox
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => removeAccount(acc.id)}
+                >
+                  <LogOut className="h-3.5 w-3.5 mr-1" /> Disconnect
+                </Button>
+              </div>
             </CardContent>
           </Card>
         ))}
@@ -628,9 +1326,12 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
   const renderEmailCard = (email: Email) => {
     const expanded = expandedId === email.id;
     const replying = replyingId === email.id;
+    const bodyText = (email.body || email.preview || "").trim();
+    const loadingBody = bodyLoadingId === email.id;
+    const showAccount = accounts.length > 1;
     return (
       <div
-        key={email.id}
+        key={`${email.accountId}:${email.id}`}
         className={cn(
           "rounded-lg border transition-all bg-black",
           email.isRead ? "border-border/50" : "border-border",
@@ -644,10 +1345,7 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
             </button>
             <div
               className="flex-1 min-w-0 cursor-pointer"
-              onClick={() => {
-                void markRead(email.id);
-                setExpandedId(expanded ? null : email.id);
-              }}
+              onClick={() => void openEmail(email)}
             >
               <div className="flex items-center gap-2">
                 <p className="text-sm font-medium text-foreground truncate">{email.from}</p>
@@ -655,6 +1353,11 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
                 {email.replied && <Reply className="h-3 w-3 text-green-500 shrink-0" />}
                 <span className={cn("h-2 w-2 rounded-full shrink-0 ml-auto", CATEGORY_COLORS[email.category])} />
               </div>
+              {showAccount && (
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate" title={email.accountId}>
+                  Inbox · {email.accountId}
+                </p>
+              )}
               <p className={cn("text-xs truncate mt-0.5", email.isRead ? "text-muted-foreground" : "text-foreground font-medium")}>
                 {email.subject}
               </p>
@@ -665,13 +1368,36 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
 
           {expanded && (
             <div className="mt-3 pt-3 border-t border-border/50 space-y-3">
-              <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">{email.preview}</p>
+              <div className="space-y-1">
+                <p className="text-[11px] text-muted-foreground">
+                  Account: <span className="text-foreground">{email.accountId}</span>
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  To: <span className="text-foreground">{email.to || "me"}</span>
+                </p>
+                <p className="text-xs font-medium text-foreground">{email.subject}</p>
+              </div>
+
+              {loadingBody ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading message…
+                </div>
+              ) : (
+                <div className="max-h-64 overflow-y-auto rounded-md border border-border/40 bg-muted/10 p-3">
+                  <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap break-words">
+                    {bodyText || "No message content."}
+                  </p>
+                </div>
+              )}
 
               <div className="p-2.5 rounded-md bg-muted/20 border border-border">
                 <p className="text-[11px] font-medium text-purple-300 flex items-center gap-1 mb-1">
                   <Sparkles className="h-3 w-3" /> Summary
                 </p>
-                <p className="text-xs text-foreground">{email.summary || email.preview}</p>
+                <p className="text-xs text-foreground">
+                  {email.summary || bodyText.slice(0, 220) || email.preview}
+                </p>
               </div>
 
               {replying ? (
@@ -680,7 +1406,17 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
                     autoFocus
                     placeholder={`Reply to ${email.from}...`}
                     value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setReplyText(next);
+                      persistDraft({
+                        messageId: email.id,
+                        accountEmail: email.accountId,
+                        draftText: next,
+                        from: email.from,
+                        subject: email.subject,
+                      });
+                    }}
                     className="w-full h-24 p-2 text-xs bg-muted/10 border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-foreground"
                   />
                   <div className="flex gap-2">
@@ -694,7 +1430,20 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
                 </div>
               ) : (
                 <div className="flex gap-2">
-                  <Button size="sm" className="bg-white text-black hover:bg-gray-200 h-8 text-xs" onClick={() => { setReplyingId(email.id); setReplyText(""); }}>
+                  <Button size="sm" className="bg-white text-black hover:bg-gray-200 h-8 text-xs" onClick={() => {
+                    setReplyingId(email.id);
+                    try {
+                      const raw = usGetItem(GMAIL_DRAFT_KEY);
+                      const d = raw ? JSON.parse(raw) : null;
+                      if (d?.messageId === email.id && d?.draftText) {
+                        setReplyText(String(d.draftText));
+                        return;
+                      }
+                    } catch {
+                      /* ignore */
+                    }
+                    setReplyText("");
+                  }}>
                     <Reply className="h-3.5 w-3.5 mr-1" /> Reply
                   </Button>
                   <Button size="sm" variant="ghost" className="h-8 text-xs text-red-400" onClick={() => void deleteEmail(email.id)}>
@@ -739,11 +1488,16 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
 
     return (
       <div className="space-y-4 max-w-2xl">
+        {renderAccountSwitcher()}
+
         {/* Always show Gmail labels on the page (not only in chat) */}
         <div className="rounded-lg border border-border/60 bg-muted/10 p-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Labels</p>
-            <span className="text-[10px] text-muted-foreground">{labels.length} custom</span>
+            <span className="text-[10px] text-muted-foreground">
+              {labels.length} custom
+              {activeAccount !== "all" ? ` · ${accountShort(activeAccount)}` : ""}
+            </span>
           </div>
           {labels.length === 0 ? (
             <p className="text-xs text-muted-foreground">
@@ -813,6 +1567,354 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
     );
   };
 
+  const renderOrganize = () => {
+    if (accounts.length === 0) {
+      return (
+        <div className="text-center py-12 text-muted-foreground max-w-sm mx-auto space-y-2">
+          <FolderKanban className="h-10 w-10 mx-auto opacity-40" />
+          <p className="text-sm font-medium text-foreground">Connect Gmail first</p>
+          <p className="text-xs">Then set rules so mail auto-moves into the right labels.</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4 max-w-2xl">
+        {renderAccountSwitcher()}
+
+        <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-2">
+          <p className="text-sm font-medium text-foreground">Mail organize</p>
+          <p className="text-xs text-muted-foreground">
+            When matching mail arrives, it is filed into your label automatically
+            {ruleAccountEmail ? ` · rules for ${ruleAccountEmail}` : ""}.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button
+              size="sm"
+              className="h-8 text-xs bg-white text-black hover:bg-gray-200"
+              onClick={() => void quickPromoRule()}
+              disabled={orgSaving}
+            >
+              {orgSaving ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1" />}
+              Move promotions → Promotions
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs"
+              onClick={() => void applyAllOrgRules()}
+              disabled={orgApplying || visibleOrgRules.length === 0}
+            >
+              {orgApplying ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5 mr-1" />
+              )}
+              Apply rules now
+            </Button>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border/60 bg-black p-3 space-y-3">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            New rule
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setRuleMatchType("from");
+                setRuleMatchValue("");
+              }}
+              className={cn(
+                "inline-flex items-center rounded-md border px-2 py-0.5 text-[11px]",
+                ruleMatchType === "from"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border/70 bg-background/60 text-foreground",
+              )}
+            >
+              From sender
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRuleMatchType("category");
+                setRuleMatchValue("promotions");
+                if (!ruleLabel.trim()) setRuleLabel("Promotions");
+              }}
+              className={cn(
+                "inline-flex items-center rounded-md border px-2 py-0.5 text-[11px]",
+                ruleMatchType === "category"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border/70 bg-background/60 text-foreground",
+              )}
+            >
+              Promotions / category
+            </button>
+          </div>
+
+          {ruleMatchType === "from" ? (
+            <Input
+              placeholder="Sender email or domain (e.g. billing@stripe.com)"
+              value={ruleMatchValue}
+              onChange={(e) => setRuleMatchValue(e.target.value)}
+              className="text-sm bg-muted/10 border-border h-9"
+            />
+          ) : (
+            <select
+              value={ruleMatchValue || "promotions"}
+              onChange={(e) => setRuleMatchValue(e.target.value)}
+              className="w-full h-9 rounded-md border border-border bg-muted/10 px-2 text-sm text-foreground"
+            >
+              <option value="promotions">Promotions</option>
+              <option value="social">Social</option>
+              <option value="updates">Updates</option>
+              <option value="forums">Forums</option>
+            </select>
+          )}
+
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-muted-foreground">Move to label</p>
+            <button
+              type="button"
+              onClick={() => {
+                setLabelPickerOpen((v) => !v);
+                if (!labelPickerOpen) void refreshLabels(ruleAccountEmail);
+              }}
+              className={cn(
+                "w-full flex items-center justify-between rounded-md border px-3 h-9 text-left text-sm transition-colors",
+                labelPickerOpen
+                  ? "border-foreground bg-muted/20"
+                  : "border-border bg-muted/10 hover:border-foreground/40",
+              )}
+            >
+              <span className={cn("truncate", ruleLabel ? "text-foreground" : "text-muted-foreground")}>
+                {ruleLabel || "Click to choose a label…"}
+              </span>
+              <span className="text-[10px] text-muted-foreground shrink-0 ml-2">
+                {labels.length} label{labels.length === 1 ? "" : "s"}
+              </span>
+            </button>
+
+            {labelPickerOpen && (
+              <div className="rounded-md border border-border/60 bg-muted/10 p-2 max-h-40 overflow-y-auto space-y-1">
+                {labels.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground px-1 py-2">
+                    No labels yet — type a new name below to create one.
+                  </p>
+                ) : (
+                  labels.map((l) => (
+                    <button
+                      key={l.id}
+                      type="button"
+                      onClick={() => {
+                        setRuleLabel(l.name);
+                        setLabelPickerOpen(false);
+                      }}
+                      className={cn(
+                        "w-full text-left rounded-md px-2 py-1.5 text-xs transition-colors",
+                        ruleLabel === l.name
+                          ? "bg-foreground text-background"
+                          : "text-foreground hover:bg-muted/40",
+                      )}
+                    >
+                      {l.name}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+
+            <Input
+              placeholder="Or type a new label name (creates it)"
+              value={ruleLabel}
+              onChange={(e) => setRuleLabel(e.target.value)}
+              className="text-sm bg-muted/10 border-border h-9"
+            />
+            {ruleLabel.trim() &&
+              !labels.some(
+                (l) => l.name.toLowerCase() === ruleLabel.trim().toLowerCase(),
+              ) && (
+                <p className="text-[10px] text-muted-foreground">
+                  “{ruleLabel.trim()}” will be created, then matching mail moves there
+                  (existing + new).
+                </p>
+              )}
+          </div>
+
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={ruleRemoveInbox}
+              onChange={(e) => setRuleRemoveInbox(e.target.checked)}
+              className="rounded border-border"
+            />
+            Remove from Inbox after filing (keep under the label)
+          </label>
+
+          <Button
+            size="sm"
+            className="w-full h-9 bg-white text-black hover:bg-gray-200 text-xs"
+            onClick={() => void saveOrgRule()}
+            disabled={orgSaving}
+          >
+            {orgSaving ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <FolderKanban className="h-3.5 w-3.5 mr-1" />}
+            {labels.some(
+              (l) => l.name.toLowerCase() === ruleLabel.trim().toLowerCase(),
+            )
+              ? "Save rule · move existing + future"
+              : "Create label · move existing + future"}
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Active rules
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                {visibleOrgRules.filter((r) => r.enabled !== false).length} running ·{" "}
+                {visibleOrgRules.filter((r) => r.enabled === false).length} paused
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void loadOrgRules()}
+                disabled={orgLoading}
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5 mr-1", orgLoading && "animate-spin")} />
+                Refresh
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 text-xs bg-white text-black hover:bg-gray-200"
+                onClick={() => void applyAllOrgRules()}
+                disabled={orgApplying || visibleOrgRules.every((r) => r.enabled === false)}
+              >
+                {orgApplying ? (
+                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5 mr-1" />
+                )}
+                Apply all
+              </Button>
+            </div>
+          </div>
+
+          {orgLoading && visibleOrgRules.length === 0 ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground py-6 justify-center">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading rules…
+            </div>
+          ) : visibleOrgRules.length === 0 ? (
+            <div className="rounded-lg border border-border/60 bg-black p-4 text-center space-y-1">
+              <FolderKanban className="h-8 w-8 mx-auto opacity-40 text-muted-foreground" />
+              <p className="text-sm text-foreground">No organization rules yet</p>
+              <p className="text-xs text-muted-foreground">
+                Create one above — existing mail moves now, new mail follows automatically.
+              </p>
+            </div>
+          ) : (
+            visibleOrgRules.map((rule) => {
+              const busy = orgRuleBusyId === rule.id;
+              const paused = rule.enabled === false;
+              const lastApplied = rule.last_applied_at
+                ? new Date(rule.last_applied_at).toLocaleString()
+                : null;
+              return (
+                <div
+                  key={rule.id}
+                  className={cn(
+                    "rounded-lg border bg-black p-3 space-y-2",
+                    paused ? "border-border/40 opacity-70" : "border-border/60",
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    <FolderKanban className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm text-foreground">
+                          <span className="text-muted-foreground">{ruleSourceLabel(rule)}</span>
+                          {" "}→{" "}
+                          <span className="font-medium">{rule.label_name}</span>
+                        </p>
+                        <span
+                          className={cn(
+                            "text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border",
+                            paused
+                              ? "border-border text-muted-foreground"
+                              : "border-green-500/40 text-green-400",
+                          )}
+                        >
+                          {paused ? "Paused" : "Active"}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {rule.remove_inbox ? "Removes from Inbox" : "Keeps in Inbox"}
+                        {" · "}
+                        {rule.account_email || "any account"}
+                        {typeof rule.applied_count === "number"
+                          ? ` · filed ${rule.applied_count}`
+                          : ""}
+                        {lastApplied ? ` · last run ${lastApplied}` : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5 pl-6">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[11px]"
+                      disabled={busy}
+                      onClick={() => void toggleOrgRule(rule)}
+                    >
+                      {busy ? (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      ) : paused ? (
+                        <Play className="h-3 w-3 mr-1" />
+                      ) : (
+                        <Pause className="h-3 w-3 mr-1" />
+                      )}
+                      {paused ? "Resume" : "Pause"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[11px]"
+                      disabled={busy || paused}
+                      onClick={() => void applyOneOrgRule(rule)}
+                    >
+                      {busy ? (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                      )}
+                      Apply now
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-[11px] text-red-400"
+                      disabled={busy}
+                      onClick={() => void removeOrgRule(rule.id)}
+                    >
+                      <Trash2 className="h-3 w-3 mr-1" />
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderClean = () => {
     if (accounts.length === 0) {
       return (
@@ -826,11 +1928,14 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
 
     return (
       <div className="space-y-4 max-w-2xl">
+        {renderAccountSwitcher()}
+
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-border bg-muted/10 p-3">
           <div>
             <p className="text-sm font-medium text-foreground">Mails to clean</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              All promotional / newsletter / spam mail (any day) — not your everyday Inbox.
+              Promotional / newsletter / spam for{" "}
+              <span className="text-foreground">{viewingLabel}</span> — not everyday Inbox.
             </p>
           </div>
           <div className="flex gap-2 shrink-0">
@@ -848,37 +1953,39 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
               size="sm"
               className="h-8 text-xs bg-white text-black hover:bg-gray-200"
               onClick={() => void cleanInbox()}
-              disabled={cleaning || cleanLoading || cleanEmails.length === 0}
+              disabled={cleaning || cleanLoading || visibleCleanEmails.length === 0}
             >
               {cleaning ? (
                 <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
               ) : (
                 <Trash2 className="h-3.5 w-3.5 mr-1" />
               )}
-              {cleaning ? "Deleting…" : `Delete all (${cleanEmails.length})`}
+              {cleaning ? "Deleting…" : `Delete all (${visibleCleanEmails.length})`}
             </Button>
           </div>
         </div>
 
-        {cleanLoading && cleanEmails.length === 0 ? (
+        {cleanLoading && visibleCleanEmails.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin mb-3" />
-            <p className="text-sm">Scanning all promotional mail…</p>
-            <p className="text-xs mt-1 opacity-70">Not just today — older promotions included</p>
+            <p className="text-sm">Scanning promotional mail…</p>
+            <p className="text-xs mt-1 opacity-70">{viewingLabel}</p>
           </div>
-        ) : cleanEmails.length === 0 ? (
+        ) : visibleCleanEmails.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <CheckCircle2 className="h-10 w-10 mx-auto mb-2 opacity-50 text-green-500" />
-            <p className="text-sm">Nothing to clean — inbox looks tidy</p>
+            <p className="text-sm">Nothing to clean for {viewingLabel}</p>
           </div>
         ) : (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              Showing {cleanEmails.length} message{cleanEmails.length === 1 ? "" : "s"} ready to remove
+              Showing {visibleCleanEmails.length} message
+              {visibleCleanEmails.length === 1 ? "" : "s"} ready to remove
+              {accounts.length > 1 ? ` · ${viewingLabel}` : ""}
             </p>
-            {cleanEmails.map((email) => (
+            {visibleCleanEmails.map((email) => (
               <div
-                key={email.id}
+                key={`${email.accountId}:${email.id}`}
                 className="rounded-lg border border-border/60 bg-black p-3 flex items-start gap-2"
               >
                 <Trash2 className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
@@ -889,6 +1996,11 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
                       {REASON_LABEL[email.cleanReason || ""] || email.cleanReason || "Unwanted"}
                     </span>
                   </div>
+                  {accounts.length > 1 && (
+                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                      Account · {email.accountId}
+                    </p>
+                  )}
                   <p className="text-xs text-foreground/90 truncate mt-0.5">{email.subject}</p>
                   <p className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">{email.preview}</p>
                   <span className="text-[10px] text-muted-foreground">{timeLabel(email.timestamp)}</span>
@@ -908,8 +2020,9 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
           <h2 className="font-semibold text-lg text-foreground flex items-center gap-2">Gmail Manager</h2>
           <p className="text-xs text-muted-foreground mt-1">
             {connectedCount} account{connectedCount !== 1 ? "s" : ""} · {unreadCount} unread
-            {cleanEmails.length > 0 && activeTab === "clean"
-              ? ` · ${cleanEmails.length} to clean`
+            {connectedCount > 1 ? ` · ${viewingLabel}` : ""}
+            {visibleCleanEmails.length > 0 && activeTab === "clean"
+              ? ` · ${visibleCleanEmails.length} to clean`
               : ""}
           </p>
         </div>
@@ -931,6 +2044,7 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
           {(
             [
               { id: "inbox", label: "Inbox", Icon: Inbox },
+              { id: "organize", label: "Organize", Icon: FolderKanban },
               { id: "accounts", label: "Accounts", Icon: Plug },
               { id: "clean", label: "Clean", Icon: Sparkles },
             ] as { id: TabId; label: string; Icon: React.FC<{ className?: string }> }[]
@@ -946,9 +2060,14 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
               )}
             >
               <Icon className="h-4 w-4" /> {label}
-              {id === "clean" && cleanEmails.length > 0 && (
+              {id === "organize" && visibleOrgRules.length > 0 && (
                 <span className="text-[10px] tabular-nums text-muted-foreground">
-                  ({cleanEmails.length})
+                  ({visibleOrgRules.length})
+                </span>
+              )}
+              {id === "clean" && visibleCleanEmails.length > 0 && (
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  ({visibleCleanEmails.length})
                 </span>
               )}
             </button>
@@ -961,9 +2080,11 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
           <div className="px-6 py-4">
             {activeTab === "inbox"
               ? renderInbox()
-              : activeTab === "accounts"
-                ? renderAccounts()
-                : renderClean()}
+              : activeTab === "organize"
+                ? renderOrganize()
+                : activeTab === "accounts"
+                  ? renderAccounts()
+                  : renderClean()}
           </div>
         </ScrollArea>
       </div>

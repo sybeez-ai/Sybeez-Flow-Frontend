@@ -1,3 +1,4 @@
+import { usGetItem } from "@/services/userStorage";
 /**
  * Build a complete Finance Manager context for the AI assistant.
  * Keeps raw life data for CRUD + a compact snapshot for Q&A.
@@ -9,7 +10,7 @@ import { appCurrencyCode } from "@/services/regionService";
 
 function readJSON(key: string): unknown {
   try {
-    return JSON.parse(localStorage.getItem(key) || "null");
+    return JSON.parse(usGetItem(key) || "null");
   } catch {
     return null;
   }
