@@ -1,35 +1,85 @@
-name: Deploy React to S3
+name: Deploy Sybeez Flow Frontend
 
 on:
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: sybeez-flow-frontend
+  cancel-in-progress: true
+
 jobs:
   deploy:
+    name: Build and Deploy
     runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v4
+    env:
+      NODE_VERSION: "22"
 
-      - name: Setup Node
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
 
+      # Change this to "npm ci" after fixing your dependency conflict.
       - name: Install Dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
-      - name: Build React App
-        run: npm run build
+      # Vite bakes these in at build time — without them the app points at localhost.
+      - name: Build Application
+        env:
+          VITE_APP_ENV: production
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_BACKEND_URL: ${{ secrets.VITE_BACKEND_URL }}
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+          VITE_USE_BACKEND: "true"
+          VITE_USE_MOCK_DATA: "false"
+        run: |
+          if [ -z "${VITE_API_URL}" ] && [ -z "${VITE_BACKEND_URL}" ]; then
+            echo "ERROR: Set secret VITE_API_URL (or VITE_BACKEND_URL) to your HTTPS API, e.g. https://api.flow.sybeez.ai"
+            exit 1
+          fi
+          npm run build
 
-      - name: Configure AWS
+      - name: Verify Build
+        run: |
+          echo "Build completed successfully."
+          ls -la
+          ls -la dist
+
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Upload to S3
+      - name: Upload Build to Amazon S3
         run: |
-          aws s3 sync dist/ s3://${{ secrets.S3_BUCKET }} --delete
+          aws s3 sync ./dist s3://${{ secrets.S3_BUCKET }} \
+            --delete \
+            --exact-timestamps
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+      - name: Deployment Success
+        run: |
+          echo "========================================="
+          echo "✅ Sybeez Flow deployed successfully"
+          echo "Frontend : https://flow.sybeez.ai"
+          echo "S3 Bucket: ${{ secrets.S3_BUCKET }}"
+          echo "CloudFront cache invalidated."
+          echo "========================================="
