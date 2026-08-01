@@ -69,18 +69,22 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
     >
       <button
         onClick={onNewChat}
+        data-tour="home-brand"
         className="flex items-center gap-2.5 px-4 h-16 transition-colors hover:bg-white/[0.04]"
         style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
       >
         <img
-          src="/logo.png?v=6"
+          src="/logo.png?v=7"
           alt="Sybeez Flow"
           className="h-8 w-8 object-contain bg-transparent"
         />
         <span className="text-[15px] font-semibold tracking-tight">Sybeez Flow</span>
       </button>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-4 pb-2">
+      <div
+        className="flex-1 min-h-0 overflow-y-auto px-3 pt-4 pb-2"
+        data-tour="workspace"
+      >
         <p className="px-2 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
           Workspace
         </p>
@@ -117,6 +121,7 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
 
         <button
           onClick={() => onNavigate("settings")}
+          data-tour="profile"
           className="w-full flex items-center gap-2.5 rounded-xl px-2 py-1.5 transition-all hover:bg-white/[0.05]"
         >
           <div className="relative">

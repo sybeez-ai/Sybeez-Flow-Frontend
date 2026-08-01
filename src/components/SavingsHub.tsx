@@ -30,6 +30,7 @@ import type {
 } from "@/types/lifeManagement";
 import { cn } from "@/lib/utils";
 import { appCurrencyCode, appCurrencySymbol, formatAppMoney } from "@/services/regionService";
+import { useAppCurrency } from "@/hooks/useAppCurrency";
 
 const TYPES: {
   kind: SavingsKind;
@@ -91,6 +92,7 @@ function money(n: number): string {
 }
 
 export default function SavingsHub() {
+  useAppCurrency();
   const [items, setItems] = useState<SavingsItem[]>([]);
   const [kind, setKind] = useState<SavingsKind>("bank_account");
   const [name, setName] = useState("");

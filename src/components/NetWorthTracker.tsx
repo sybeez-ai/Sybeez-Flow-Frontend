@@ -50,6 +50,7 @@ import {
   type NetWorthSummary,
 } from "@/services/netWorthService";
 import { CURRENCIES, currencyService } from "@/services/currencyService";
+import { setAppCurrency } from "@/services/regionService";
 
 type NWTab = "overview" | "assets" | "liabilities" | "history" | "projector";
 
@@ -310,7 +311,13 @@ const NetWorthTracker = () => {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={display} onValueChange={(v) => netWorthService.setDisplayCurrency(v)}>
+            <Select
+              value={display}
+              onValueChange={(v) => {
+                setAppCurrency(v);
+                toast.success(`Finance currency set to ${v}`);
+              }}
+            >
               <SelectTrigger className="h-9 w-[150px] text-sm">
                 <Coins className="h-3.5 w-3.5 mr-1 text-muted-foreground" />
                 <SelectValue />

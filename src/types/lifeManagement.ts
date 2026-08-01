@@ -55,6 +55,39 @@ export interface Bill {
   category: 'electricity' | 'water' | 'gas' | 'internet' | 'phone' | 'rent' | 'tax' | 'other';
   isPaid: boolean;
   reminderDays: number;
+  /** Optional provider / landlord */
+  provider?: string;
+  /** Day of month for recurring commitments (1–31) */
+  dueDay?: number;
+}
+
+/**
+ * Money between you and other people.
+ * - owe: you need to give / repay them
+ * - collect: you will receive money from them (outside)
+ * Supports interest-only for a few months, then full principal repayment.
+ */
+export interface PeopleMoneyItem {
+  id: string;
+  personName: string;
+  direction: 'owe' | 'collect';
+  /** Remaining principal */
+  amount: number;
+  originalAmount: number;
+  /** Optional annual interest % */
+  interestRate?: number;
+  /** Months to pay interest only before full repayment */
+  interestOnlyMonths?: number;
+  /** Interest-only payments already made */
+  interestOnlyPaid?: number;
+  /** Monthly interest amount during interest-only period */
+  monthlyInterest?: number;
+  nextPaymentDate?: string;
+  /** When full principal is due (after interest-only window) */
+  fullPayDate?: string;
+  notes?: string;
+  status: 'open' | 'settled';
+  createdAt: string;
 }
 
 export interface Task {
@@ -235,6 +268,8 @@ export interface LifeManagementData {
   emis: EMI[];
   insurances: Insurance[];
   bills: Bill[];
+  /** Money you owe people / money you will collect from people */
+  peopleMoney: PeopleMoneyItem[];
   tasks: Task[];
   meetings: Meeting[];
   habits: Habit[];

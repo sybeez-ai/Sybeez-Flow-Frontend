@@ -16,6 +16,7 @@ import {
   getStoredUser,
   isLocalToken,
   detectLoginCountry,
+  markTourPending,
   persistSession,
   recordLoginCountry,
   signInLocal as signInLocalAccount,
@@ -126,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const applySession = useCallback(
     async (
-      session: { access_token: string; user: AuthUser },
+      session: { access_token: string; user: AuthUser; is_new_user?: boolean },
       opts?: {
         isRegistration?: boolean;
         country?: string;
@@ -141,6 +142,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(session.access_token);
       notifyUserScopeChanged();
       void hydrateFromBackend();
+
+      if (opts?.isRegistration || session.is_new_user) {
+        markTourPending(session.user.id);
+      }
 
       // On register: set currency / locale / consent from detected country
       if (opts?.isRegistration) {
@@ -216,7 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (credential: string) => {
       const session = await exchangeGoogleCredential(credential);
       persistSession(session);
-      const needsRegion = !getRegionProfile();
+      const needsRegion = !getRegionProfile() || Boolean(session.is_new_user);
       await applySession(session, { isRegistration: needsRegion });
     },
     [applySession],
@@ -227,9 +232,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       access_token: string;
       expires_in?: number;
       user: AuthUser;
+      is_new_user?: boolean;
     }) => {
       persistSession(session as Parameters<typeof persistSession>[0]);
-      const needsRegion = !getRegionProfile();
+      const needsRegion = !getRegionProfile() || Boolean(session.is_new_user);
       await applySession(session, { isRegistration: needsRegion });
     },
     [applySession],

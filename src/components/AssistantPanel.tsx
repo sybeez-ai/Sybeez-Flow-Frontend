@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Bot, Loader2, Plus, Send, Sparkles, User, X } from "lucide-react";
+import { ArrowUp, Loader2, Plus, Send, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +17,7 @@ import {
   type OpenChatSessionDetail,
 } from "@/services/chatSessionStore";
 import ChatHistoryPopover from "@/components/ChatHistoryPopover";
+import { SybeezChatAvatar, UserChatAvatar } from "@/components/ChatAvatars";
 import { currentUserId, usGetItem, usRemoveItem, usSetItem, userSessionId } from "@/services/userStorage";
 import { USER_SCOPE_CHANGED_EVENT } from "@/services/persistSync";
 
@@ -314,6 +315,18 @@ const AssistantPanel = ({
     }
   };
 
+  // Goals / other panels can ask the coach with a ready prompt
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId?: string; prompt?: string }>).detail;
+      if (!detail?.prompt) return;
+      if (detail.sessionId && detail.sessionId !== baseSessionId) return;
+      void send(detail.prompt);
+    };
+    window.addEventListener("sybeez:coach-ask", onAsk);
+    return () => window.removeEventListener("sybeez:coach-ask", onAsk);
+  });
+
   const sendGmailDraft = async () => {
     const draft = readGmailDraft() || gmailDraft;
     if (!draft?.messageId || !draft.draftText?.trim() || sendingReply) return;
@@ -354,13 +367,13 @@ const AssistantPanel = ({
     <aside className="w-[420px] flex-none flex flex-col border-l border-border bg-card/30">
       {/* Header */}
       <div className="flex items-center justify-between px-4 h-[57px] border-b border-border/60">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground">
-            <Sparkles className="h-4 w-4 text-background" />
-          </div>
-          <div className="leading-tight">
-            <p className="text-sm font-semibold">{title}</p>
-            {subtitle && <p className="text-[11px] text-muted-foreground">{subtitle}</p>}
+        <div className="flex min-w-0 items-center gap-2.5">
+          <SybeezChatAvatar size={32} className="shrink-0 rounded-lg" />
+          <div className="min-w-0 flex flex-col justify-center leading-tight">
+            <p className="text-sm font-semibold truncate">{title}</p>
+            {subtitle && (
+              <p className="text-[11px] text-muted-foreground truncate">{subtitle}</p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -396,11 +409,9 @@ const AssistantPanel = ({
             Loading chat…
           </div>
         ) : messages.length === 0 && !isLoading ? (
-          <div className="flex h-full flex-col items-center justify-center text-center">
-            <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-muted ring-1 ring-border">
-              <Sparkles className="h-5 w-5 text-foreground" />
-            </div>
-            <p className="text-sm text-muted-foreground max-w-[240px]">{emptyHint}</p>
+          <div className="flex h-full flex-col items-center justify-center text-center px-2">
+            <SybeezChatAvatar size={48} className="mb-4 rounded-2xl mx-auto" />
+            <p className="text-sm text-muted-foreground max-w-[240px] mx-auto">{emptyHint}</p>
             {suggestions.length > 0 && (
               <div className="mt-5 flex flex-col gap-2 w-full">
                 {suggestions.map((s) => (
@@ -418,12 +429,8 @@ const AssistantPanel = ({
         ) : (
           <>
             {messages.map((m, i) => (
-              <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                {m.role === "assistant" && (
-                  <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-foreground">
-                    <Bot className="h-3.5 w-3.5 text-background" />
-                  </div>
-                )}
+              <div key={i} className={`flex gap-2.5 items-start ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                {m.role === "assistant" && <SybeezChatAvatar messageAlign />}
                 <div
                   className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed ${
                     m.role === "user"
@@ -439,18 +446,12 @@ const AssistantPanel = ({
                     m.content
                   )}
                 </div>
-                {m.role === "user" && (
-                  <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-muted ring-1 ring-border">
-                    <User className="h-3.5 w-3.5 text-muted-foreground" />
-                  </div>
-                )}
+                {m.role === "user" && <UserChatAvatar />}
               </div>
             ))}
             {isLoading && (
-              <div className="flex gap-2.5 justify-start">
-                <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-foreground">
-                  <Bot className="h-3.5 w-3.5 text-background" />
-                </div>
+              <div className="flex gap-2.5 justify-start items-start">
+                <SybeezChatAvatar messageAlign />
                 <div className="flex items-center gap-2 rounded-2xl border border-border bg-background px-3.5 py-2.5 text-[13.5px] text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Thinking…

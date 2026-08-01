@@ -1,60 +1,26 @@
 import { usGetItem } from "@/services/userStorage";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowUp,
-  Bot,
   CalendarDays,
   CheckCircle2,
   Flame,
-  Loader2,
   PiggyBank,
-  Plus,
-  Sparkles,
   Target,
   TrendingUp,
   Wallet,
-  User,
-  X,
 } from "lucide-react";
-import { Textarea } from "@/components/ui/textarea";
-import { askAI } from "@/services/aiService";
 import { LifeManagementService } from "@/services/lifeManagement";
-import { chatHistory } from "@/services/chatHistory";
 import { netWorthService } from "@/services/netWorthService";
 import { currencyService } from "@/services/currencyService";
 import { appCurrencyCode, formatAppMoney } from "@/services/regionService";
 import { DATA_CHANGED_EVENT } from "@/services/persistSync";
 import MotivationQuote from "@/components/MotivationQuote";
-import {
-  OPEN_CHAT_SESSION_EVENT,
-  loadChatSession,
-  persistChatSession,
-  viewForSessionId,
-  type OpenChatSessionDetail,
-} from "@/services/chatSessionStore";
 
 interface HomeDashboardProps {
   onOpenFinance?: () => void;
   onOpenPlanner?: () => void;
 }
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-const SYSTEM_PROMPT =
-  "You are Sybeez Flow, a friendly and capable personal assistant focused on two things: " +
-  "personal finance and daily life planning / productivity. " +
-  "Answer concisely and helpfully. When relevant, guide the user toward the Finance Manager " +
-  "or Life Planner. Use short paragraphs and bullet points. Be warm and encouraging.";
-
-const SUGGESTIONS = [
-  "How can I save more money this month?",
-  "Plan a productive morning routine",
-  "Summarize my financial health",
-  "Help me set a weekly goal",
-];
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -64,22 +30,7 @@ function greeting(): string {
 }
 
 const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => {
-  const [input, setInput] = useState("");
-  const [panelInput, setPanelInput] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
   const [tick, setTick] = useState(0);
-  const [homeSessionId, setHomeSessionId] = useState("home-assistant");
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const panelTextareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const resizePanelComposer = () => {
-    const el = panelTextareaRef.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, 24), 160)}px`;
-  };
 
   useEffect(() => {
     const refresh = () => setTick((t) => t + 1);
@@ -292,127 +243,8 @@ const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => 
   });
 
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, isLoading, chatOpen]);
-
-  useEffect(() => {
-    resizePanelComposer();
-  }, [panelInput]);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const query = (e as CustomEvent<string>).detail;
-      if (typeof query === "string" && query.trim()) {
-        setInput(query);
-        setChatOpen(false);
-      }
-    };
-    window.addEventListener("history-item-selected", handler);
-    return () => window.removeEventListener("history-item-selected", handler);
-  }, []);
-
-  // Open a full home chat from History
-  useEffect(() => {
-    const onOpen = (e: Event) => {
-      const detail = (e as CustomEvent<OpenChatSessionDetail>).detail;
-      if (!detail?.sessionId) return;
-      if (viewForSessionId(detail.sessionId) !== "home") return;
-      setHomeSessionId(detail.sessionId);
-      setChatOpen(true);
-      void loadChatSession(detail.sessionId).then((stored) => {
-        setMessages(stored);
-      });
-    };
-    window.addEventListener(OPEN_CHAT_SESSION_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_CHAT_SESSION_EVENT, onOpen);
-  }, []);
-
-  const send = async (text: string) => {
-    const prompt = text.trim();
-    if (!prompt || isLoading) return;
-
-    setChatOpen(true);
-    const nextHistory = [...messages];
-    setMessages((m) => [...m, { role: "user", content: prompt }]);
-    setInput("");
-    setPanelInput("");
-    setIsLoading(true);
-
-    if (nextHistory.length === 0) {
-      chatHistory.add(prompt, homeSessionId, "Home");
-    }
-
-    try {
-      let context: Record<string, unknown> = {
-        feature: "home",
-        dashboard: {
-          currency: metrics.currency,
-          monthIn: metrics.monthIn,
-          monthOut: metrics.monthOut,
-          monthBalance: metrics.monthBalance,
-          savingsTotal: metrics.savingsTotal,
-          netWorth: metrics.netWorth,
-          totalAssets: metrics.totalAssets,
-          totalLiabilities: metrics.totalLiabilities,
-          emiMonthly: metrics.emiMonthly,
-          unpaidBills: metrics.unpaidBills,
-          tasksDone: metrics.tasksDone,
-          tasksTotal: metrics.tasksTotal,
-          habitsDoneToday: metrics.habitsDoneToday,
-          habitsTotal: metrics.habitsTotal,
-          productivityScore: metrics.productivityScore,
-        },
-      };
-      try {
-        const data = LifeManagementService.getData?.();
-        if (data) {
-          context = {
-            ...context,
-            transactionsThisMonth: (data.transactions || [])
-              .filter((t) => (t.date || "").startsWith(metrics.currentMonth))
-              .slice(-20),
-            savingsItems: data.savingsItems || [],
-            emis: data.emis || [],
-          };
-        }
-      } catch {
-        /* ignore */
-      }
-
-      const reply = await askAI(prompt, {
-        system: SYSTEM_PROMPT,
-        sessionId: homeSessionId,
-        history: nextHistory,
-        context,
-      });
-      const withAssistant: ChatMessage[] = [
-        ...nextHistory,
-        { role: "user", content: prompt },
-        { role: "assistant", content: reply },
-      ];
-      setMessages(withAssistant);
-      void persistChatSession(homeSessionId, withAssistant, "Home").then(() => {
-        window.dispatchEvent(new Event("sybeez-chat-saved"));
-      });
-    } catch {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: "Sorry, I couldn't reach the assistant just now. Please try again." },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const newChat = () => {
-    setMessages([]);
-    setPanelInput("");
-  };
-
   return (
     <div className="w-full h-full flex bg-background text-foreground overflow-hidden">
-      {/* Main dashboard */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-5xl mx-auto px-6 w-full py-8">
@@ -605,118 +437,6 @@ const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => 
           </div>
         </div>
       </div>
-
-      {/* Right-side chat panel */}
-      {chatOpen && (
-        <aside className="w-full max-w-[440px] flex-none flex flex-col" style={{background:'rgba(255,255,255,0.03)',backdropFilter:'blur(28px) saturate(180%)',WebkitBackdropFilter:'blur(28px) saturate(180%)',borderLeft:'1px solid rgba(255,255,255,0.07)'}}>
-          {/* Panel header */}
-          <div className="flex items-center justify-between px-4 h-14" style={{borderBottom:'1px solid rgba(255,255,255,0.06)'}} >
-            <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/10">
-                  <Sparkles className="h-4 w-4 text-white" />
-              </div>
-              <div className="leading-tight">
-                <p className="text-sm font-semibold">Sybeez Flow</p>
-                <p className="text-[11px] text-muted-foreground">Finance &amp; life planning</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={newChat}
-                title="New chat"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setChatOpen(false)}
-                title="Close"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Messages */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
-            {messages.length === 0 && !isLoading && (
-              <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
-                <Sparkles className="mb-3 h-6 w-6" />
-                <p className="text-sm">Ask me anything about your money or your day.</p>
-              </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                {m.role === "assistant" && (
-                  <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-foreground">
-                    <Bot className="h-3.5 w-3.5 text-background" />
-                  </div>
-                )}
-                <div
-                  className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap ${
-                    m.role === "user"
-                      ? "bg-foreground text-background"
-                      : "border border-border bg-background text-foreground"
-                  }`}
-                >
-                  {m.content}
-                </div>
-                {m.role === "user" && (
-                  <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-muted ring-1 ring-border">
-                    <User className="h-3.5 w-3.5 text-muted-foreground" />
-                  </div>
-                )}
-              </div>
-            ))}
-            {isLoading && (
-              <div className="flex gap-2.5 justify-start">
-                <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-foreground">
-                  <Bot className="h-3.5 w-3.5 text-background" />
-                </div>
-                <div className="flex items-center gap-2 rounded-2xl border border-border bg-background px-3.5 py-2.5 text-[13.5px] text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Thinking…
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Panel composer */}
-          <div className="border-t p-3" style={{borderColor:'rgba(255,255,255,0.06)'}}>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                send(panelInput);
-              }}
-              className="relative flex items-end gap-2 rounded-2xl px-3.5 py-2.5 transition-all focus-within:bg-white/[0.06]" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)'}}
-            >
-              <Textarea
-                ref={panelTextareaRef}
-                value={panelInput}
-                onChange={(e) => setPanelInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send(panelInput);
-                  }
-                }}
-                placeholder="Reply to Sybeez Flow…"
-                rows={1}
-                className="min-h-[24px] max-h-40 flex-1 resize-none overflow-y-auto border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 text-[13.5px] leading-relaxed"
-              />
-              <button
-                type="submit"
-                disabled={!panelInput.trim() || isLoading}
-                className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-foreground text-background transition-opacity disabled:opacity-30"
-                aria-label="Send"
-              >
-                {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-3.5 w-3.5" />}
-              </button>
-            </form>
-          </div>
-        </aside>
-      )}
     </div>
   );
 };

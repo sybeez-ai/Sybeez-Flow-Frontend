@@ -26,6 +26,7 @@ import {
   ExtendedDailyLifeData,
 } from "@/types/dailyLife";
 import { cn } from "@/lib/utils";
+import { toggleMilestoneSynced, appendProgressLog } from "@/services/goalProgressService";
 import {
   HabitTracker,
   GoalTracker,
@@ -247,28 +248,33 @@ const TABS: { id: TabId; label: string; Icon: React.FC<{ className?: string }> }
   { id: 'mood',      label: 'Mood',      Icon: Smile },
   { id: 'journal',   label: 'Journal',   Icon: BookOpen },
   { id: 'stats',     label: 'Stats',     Icon: BarChart2 },
-  { id: 'review',    label: 'Review',    Icon: ClipboardList },
+  { id: 'review',    label: 'History',   Icon: ClipboardList },
   { id: 'sync',      label: 'Sync',      Icon: RefreshCw },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────
 interface DailyLifePlannerProps {
   onClose?: () => void;
+  onSwitchToFinance?: () => void;
+  activeTab?: TabId;
+  onTabChange?: (tab: TabId) => void;
 }
 
-const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({ onClose }) => {
+const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
+  onClose,
+  activeTab: controlledTab,
+  onTabChange,
+}) => {
   const [currentDate] = useState(new Date());
-  const [activeTab, setActiveTab] = useState<TabId>(() => {
-    try {
-      const saved = localStorage.getItem("sybeez_planner_tab") as TabId | null;
-      if (saved && ["schedule", "habits", "focus", "goals", "calendar", "mood", "journal", "stats", "review", "sync"].includes(saved)) {
-        return saved;
-      }
-    } catch {
-      /* ignore */
-    }
-    return "schedule";
-  });
+  const [internalTab, setInternalTab] = useState<TabId>("schedule");
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = useCallback(
+    (tab: TabId) => {
+      if (onTabChange) onTabChange(tab);
+      else setInternalTab(tab);
+    },
+    [onTabChange],
+  );
   const [data, setDataState] = useState<ExtendedDailyLifeData>(loadExtData);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -549,18 +555,35 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({ onClose }) 
   };
 
   const toggleTask = (id: string) =>
-    setData((prev) => ({
-      ...prev,
-      dailySchedule: prev.dailySchedule.map((b) => {
-        if (b.id !== id) return b;
-        const nextDone = !b.isCompleted;
-        return {
-          ...b,
-          isCompleted: nextDone,
-          completedAt: nextDone ? TODAY : undefined,
-        };
-      }),
-    }));
+    setData((prev) => {
+      const block = prev.dailySchedule.find((b) => b.id === id);
+      if (!block) return prev;
+      const nextDone = !block.isCompleted;
+      let goals = prev.goals;
+      if (block.goalId && nextDone) {
+        goals = prev.goals.map((g) => {
+          if (g.id !== block.goalId) return g;
+          return appendProgressLog(g, {
+            delta: 1,
+            note: `Schedule: ${block.title}`,
+            source: "schedule",
+            scheduleBlockId: block.id,
+          });
+        });
+      }
+      return {
+        ...prev,
+        goals,
+        dailySchedule: prev.dailySchedule.map((b) => {
+          if (b.id !== id) return b;
+          return {
+            ...b,
+            isCompleted: nextDone,
+            completedAt: nextDone ? TODAY : undefined,
+          };
+        }),
+      };
+    });
 
   const deleteTask = (id: string) =>
     setData(prev => ({ ...prev, dailySchedule: prev.dailySchedule.filter(b => b.id !== id) }));
@@ -641,14 +664,11 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({ onClose }) 
     setData(prev => ({ ...prev, goals: prev.goals.filter(g => g.id !== goalId) })), []);
 
   const toggleMilestone = useCallback((goalId: string, milestoneId: string) =>
-    setData(prev => ({
+    setData((prev) => ({
       ...prev,
-      goals: prev.goals.map(g => g.id !== goalId ? g : {
-        ...g,
-        milestones: (g.milestones ?? []).map(m => m.id !== milestoneId ? m : {
-          ...m, isCompleted: !m.isCompleted, completedAt: !m.isCompleted ? new Date().toISOString() : undefined,
-        }),
-      }),
+      goals: prev.goals.map((g) =>
+        g.id !== goalId ? g : toggleMilestoneSynced(g, milestoneId),
+      ),
     })), []);
 
   const addMilestone = useCallback((goalId: string, milestone: GoalMilestone) =>
@@ -656,6 +676,39 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({ onClose }) 
       ...prev,
       goals: prev.goals.map(g => g.id === goalId ? { ...g, milestones: [...(g.milestones ?? []), milestone] } : g),
     })), []);
+
+  const addGoalToSchedule = useCallback((goal: Goal, title: string) => {
+    const start = nowHHMM();
+    const end = addMinutesToHHMM(start, 60);
+    setData((prev) => ({
+      ...prev,
+      dailySchedule: [
+        ...prev.dailySchedule,
+        {
+          id: `goal-task-${Date.now()}`,
+          title,
+          startTime: start,
+          endTime: end,
+          type: "work",
+          description: `Goal: ${goal.title}`,
+          isCompleted: false,
+          canSkip: true,
+          goalId: goal.id,
+          date: TODAY,
+        },
+      ],
+    }));
+    setActiveTab("schedule");
+    toast.success("Added to today’s schedule");
+  }, []);
+
+  const askCoachAboutGoals = useCallback((prompt: string) => {
+    window.dispatchEvent(
+      new CustomEvent("sybeez:coach-ask", {
+        detail: { sessionId: "productivity-coach", prompt },
+      }),
+    );
+  }, []);
 
   // ── Pomodoro ────────────────────────────────────────────────────────────────
   const updatePomodoroSettings = useCallback((settings: PomodoroSettings) =>
@@ -796,6 +849,11 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({ onClose }) 
                             {active && (
                               <span className="text-[9px] font-bold uppercase tracking-wide text-green-500 bg-green-500/15 px-1.5 py-0.5 rounded-full animate-pulse">
                                 Now
+                              </span>
+                            )}
+                            {block.goalId && (
+                              <span className="text-[9px] uppercase tracking-wide text-primary bg-primary/15 px-1.5 py-0.5 rounded-full">
+                                Goal
                               </span>
                             )}
                             {!selectedTemplate &&
@@ -1104,7 +1162,18 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({ onClose }) 
       case 'schedule':  return renderScheduleTab();
       case 'habits':    return <HabitTracker habits={data.habits} onAddHabit={addHabit} onToggleHabit={toggleHabit} onDeleteHabit={deleteHabit} onEditHabit={editHabit} />;
       case 'focus':     return <PomodoroTimer settings={data.pomodoroSettings} sessions={data.pomodoroHistory} onSettingsChange={updatePomodoroSettings} onSessionComplete={completeSession} />;
-      case 'goals':     return <GoalTracker goals={data.goals} onAddGoal={addGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onToggleMilestone={toggleMilestone} onAddMilestone={addMilestone} />;
+      case 'goals':     return (
+        <GoalTracker
+          goals={data.goals}
+          onAddGoal={addGoal}
+          onUpdateGoal={updateGoal}
+          onDeleteGoal={deleteGoal}
+          onToggleMilestone={toggleMilestone}
+          onAddMilestone={addMilestone}
+          onAddToSchedule={addGoalToSchedule}
+          onAskCoach={askCoachAboutGoals}
+        />
+      );
       case 'calendar':  return <ProductivityCalendar events={data.calendarEvents} scheduleBlocks={schedule} onAddEvent={addCalendarEvent} />;
       case 'mood':      return <MoodTracker moods={data.moodHistory} onAddMood={addMood} onUpdateMood={updateMood} />;
       case 'journal':   return <DailyJournal entries={data.journal} onAddEntry={addJournalEntry} onUpdateEntry={updateJournalEntry} onDeleteEntry={deleteJournalEntry} />;

@@ -23,6 +23,58 @@ export interface AuthSession {
   access_token: string;
   expires_in: number;
   user: AuthUser;
+  /** True when this auth call created the account (signup / first OAuth). */
+  is_new_user?: boolean;
+}
+
+const TOUR_PENDING_KEY = "sybeez_tour_pending";
+
+export function markTourPending(userId?: string | null): void {
+  try {
+    localStorage.setItem(TOUR_PENDING_KEY, userId || "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearTourPending(): void {
+  try {
+    localStorage.removeItem(TOUR_PENDING_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isTourPending(userId?: string | null): boolean {
+  try {
+    const v = localStorage.getItem(TOUR_PENDING_KEY);
+    if (!v) return false;
+    if (!userId) return true;
+    return v === userId || v === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function tourDoneKey(userId: string): string {
+  return `sybeez_tour_done:${userId}`;
+}
+
+export function isTourDone(userId: string): boolean {
+  try {
+    return localStorage.getItem(tourDoneKey(userId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markTourDone(userId: string): void {
+  try {
+    localStorage.setItem(tourDoneKey(userId), "1");
+    clearTourPending();
+  } catch {
+    /* ignore */
+  }
 }
 
 export interface LoginCountry {
@@ -245,6 +297,9 @@ export async function signUpLocal(input: {
   email: string;
   password: string;
   verificationToken?: string;
+  country?: string;
+  countryCode?: string;
+  consentKind?: string;
 }): Promise<AuthSession> {
   const name = input.name.trim();
   const email = input.email.trim().toLowerCase();
@@ -265,6 +320,9 @@ export async function signUpLocal(input: {
       email,
       password,
       verification_token: input.verificationToken,
+      country: input.country || "",
+      country_code: input.countryCode || "",
+      consent_kind: input.consentKind || "",
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -300,6 +358,7 @@ export async function signUpLocal(input: {
     access_token: data.access_token,
     expires_in: data.expires_in || 60 * 60 * 24 * 7,
     user: data.user as AuthUser,
+    is_new_user: data.is_new_user !== false,
   };
 }
 

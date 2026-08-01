@@ -26,6 +26,7 @@ import { LifeManagementService } from "@/services/lifeManagement";
 import { DATA_CHANGED_EVENT } from "@/services/persistSync";
 import type { Transaction } from "@/types/lifeManagement";
 import { formatAppMoney } from "@/services/regionService";
+import { useAppCurrency } from "@/hooks/useAppCurrency";
 import { cn } from "@/lib/utils";
 
 const FOLDERS_KEY = "sybeez_inout_month_folders";
@@ -104,6 +105,7 @@ type FolderRow = {
 };
 
 export default function DailyInOutHub() {
+  useAppCurrency();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [folders, setFolders] = useState<string[]>(() => {
     const saved = readFolders();

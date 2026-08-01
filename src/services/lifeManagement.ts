@@ -1,4 +1,4 @@
-import { LifeManagementData, Subscription, EMI, Insurance, Bill, Task, Meeting, Habit, Reminder, SavingsPlan, SavingsItem, Investment, CreditCard, Budget, Transaction, FinancialSummary } from "@/types/lifeManagement";
+import { LifeManagementData, Subscription, EMI, Insurance, Bill, PeopleMoneyItem, Task, Meeting, Habit, Reminder, SavingsPlan, SavingsItem, Investment, CreditCard, Budget, Transaction, FinancialSummary } from "@/types/lifeManagement";
 import { usGetItem, usSetItem } from "@/services/userStorage";
 
 const STORAGE_KEY = "life_management_data";
@@ -15,6 +15,7 @@ export class LifeManagementService {
         emis: parsed.emis || [],
         insurances: parsed.insurances || [],
         bills: parsed.bills || [],
+        peopleMoney: parsed.peopleMoney || [],
         tasks: parsed.tasks || [],
         meetings: parsed.meetings || [],
         habits: parsed.habits || [],
@@ -32,6 +33,7 @@ export class LifeManagementService {
       emis: [],
       insurances: [],
       bills: [],
+      peopleMoney: [],
       tasks: [],
       meetings: [],
       habits: [],
@@ -134,6 +136,30 @@ export class LifeManagementService {
   static deleteBill(id: string): void {
     const data = this.getData();
     data.bills = data.bills.filter(b => b.id !== id);
+    this.saveData(data);
+  }
+
+  // People money (owe / collect) + interest-only then full pay
+  static addPeopleMoney(item: PeopleMoneyItem): void {
+    const data = this.getData();
+    data.peopleMoney = data.peopleMoney || [];
+    data.peopleMoney.push(item);
+    this.saveData(data);
+  }
+
+  static updatePeopleMoney(id: string, updates: Partial<PeopleMoneyItem>): void {
+    const data = this.getData();
+    data.peopleMoney = data.peopleMoney || [];
+    const index = data.peopleMoney.findIndex((p) => p.id === id);
+    if (index !== -1) {
+      data.peopleMoney[index] = { ...data.peopleMoney[index], ...updates };
+      this.saveData(data);
+    }
+  }
+
+  static deletePeopleMoney(id: string): void {
+    const data = this.getData();
+    data.peopleMoney = (data.peopleMoney || []).filter((p) => p.id !== id);
     this.saveData(data);
   }
 
@@ -412,13 +438,42 @@ export class LifeManagementService {
     (data.bills || []).forEach((bill) => {
       if (bill.isPaid && bill.frequency === "one-time") return;
       const remind = bill.reminderDays ?? 7;
-      if (withinWindow(bill.dueDate, remind)) {
+      const date =
+        bill.frequency !== "one-time" && bill.dueDay
+          ? resolveNextDue(bill.dueDay, bill.dueDate)
+          : bill.dueDate;
+      if (withinWindow(date, remind)) {
         upcoming.push({
-          type: "Bill",
+          type: "Commitment",
           name: bill.name,
           amount: bill.amount,
-          date: bill.dueDate,
+          date,
           id: bill.id,
+        });
+      }
+    });
+
+    (data.peopleMoney || []).forEach((pm) => {
+      if (pm.status === "settled") return;
+      const onlyLeft = Math.max(
+        0,
+        (pm.interestOnlyMonths || 0) - (pm.interestOnlyPaid || 0),
+      );
+      const payingInterestOnly = onlyLeft > 0 && (pm.monthlyInterest || 0) > 0;
+      const amount = payingInterestOnly
+        ? pm.monthlyInterest || 0
+        : pm.amount;
+      const date = payingInterestOnly
+        ? pm.nextPaymentDate || pm.fullPayDate || ""
+        : pm.fullPayDate || pm.nextPaymentDate || "";
+      if (!date) return;
+      if (withinWindow(date, 7)) {
+        upcoming.push({
+          type: pm.direction === "owe" ? "To pay" : "To collect",
+          name: pm.personName,
+          amount,
+          date,
+          id: pm.id,
         });
       }
     });

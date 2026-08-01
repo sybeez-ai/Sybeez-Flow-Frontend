@@ -422,7 +422,35 @@ export function scanAndEmitNotifications(opts?: {
     }
   }
 
+  // ── Feedback nudge (until first submit) ────────────────────────────────
+  if (prefs.inApp && !hasSubmittedFeedback()) {
+    const slot = Math.floor(new Date().getHours() / 4); // ~every 4 hours
+    const before = upsertNotification({
+      sourceKey: `system:feedback-nudge:${today}:${slot}`,
+      module: "system",
+      title: "Share quick feedback",
+      body: "Tell us issues you face and what to improve — Profile → Account",
+      target: "settings",
+      severity: "info",
+      toastOnce: true,
+      toastFn,
+    });
+    if (before) created += 1;
+  }
+
   return created;
+}
+
+function hasSubmittedFeedback(): boolean {
+  return usGetItem("sybeez_feedback_submitted") === "1";
+}
+
+/** Remove all feedback nudge notifications after the user submits. */
+export function clearFeedbackNudgeNotifications() {
+  const next = listNotifications().filter(
+    (n) => !n.sourceKey.startsWith("system:feedback-nudge:"),
+  );
+  saveNotifications(next);
 }
 
 export { DEFAULT_PREFS };

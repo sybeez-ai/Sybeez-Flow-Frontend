@@ -23,6 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { LifeManagementService } from "@/services/lifeManagement";
 import { DATA_CHANGED_EVENT } from "@/services/persistSync";
 import { formatAppMoney, appCurrencyCode } from "@/services/regionService";
+import { useAppCurrency } from "@/hooks/useAppCurrency";
 import { cn } from "@/lib/utils";
 
 type FinanceTab =
@@ -63,6 +64,7 @@ export default function FinanceDashboard({
   healthScore,
   sideIncome,
 }: Props) {
+  useAppCurrency();
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const onChange = (e: Event) => {

@@ -294,6 +294,56 @@ export function consentCopy(kind: ConsentKind): {
   };
 }
 
+/**
+ * Set the app-wide Finance currency. Applies everywhere:
+ * base currency, Settings preference, region profile, Net Worth display.
+ */
+export function setAppCurrency(code: string): string {
+  const next = (code || "").trim().toUpperCase();
+  if (!next) return appCurrencyCode();
+
+  currencyService.setBaseCurrency(next);
+
+  try {
+    netWorthService.setDisplayCurrency(next);
+  } catch {
+    /* optional */
+  }
+
+  try {
+    const raw = usGetItem("sybeez_settings");
+    const settings = raw ? JSON.parse(raw) : {};
+    settings.preferences = {
+      ...(settings.preferences || {}),
+      currency: next,
+    };
+    usSetItem("sybeez_settings", JSON.stringify(settings));
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const profile = getRegionProfile();
+    if (profile) {
+      saveRegionProfile({ ...profile, currency: next });
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent("sybeez:region-changed", {
+        detail: { currency: next },
+      }),
+    );
+  } catch {
+    /* ignore */
+  }
+
+  return next;
+}
+
 /** Format money in the user's registered/base currency. */
 export function formatAppMoney(amount: number): string {
   const code = currencyService.getBaseCurrency() || getRegionProfile()?.currency || "USD";

@@ -5,6 +5,8 @@
 import { usGetItem, usRemoveItem, usSetItem } from "@/services/userStorage";
 import { LifeManagementService } from "@/services/lifeManagement";
 import type { Transaction } from "@/types/lifeManagement";
+import type { Goal } from "@/types/dailyLife";
+import { appendProgressLog } from "@/services/goalProgressService";
 import {
   DATA_CHANGED_EVENT,
   scheduleFinancePersist,
@@ -44,6 +46,14 @@ export type AgentAction = {
   subject?: string;
   fill_reply_box?: boolean;
   clear_draft?: boolean;
+  delta?: number;
+  note?: string;
+  goalId?: string;
+  title?: string;
+  entry?: Record<string, unknown>;
+  gratitude?: Record<string, unknown>;
+  memory?: Record<string, unknown>;
+  thought?: Record<string, unknown>;
 };
 
 function notifyChanged(detail: { domains: string[] }) {
@@ -244,7 +254,27 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
         if (updates.isCompleted === false) {
           updates.completedAt = undefined;
         }
+        const wasDone = Boolean(schedule[idx].isCompleted);
         schedule[idx] = { ...schedule[idx], ...updates };
+        const nowDone = Boolean(schedule[idx].isCompleted);
+        // Completing a goal-linked task logs +1 progress on that goal
+        if (!wasDone && nowDone && schedule[idx].goalId) {
+          const goals = Array.isArray(ext.goals)
+            ? [...(ext.goals as Goal[])]
+            : [];
+          const gIdx = goals.findIndex(
+            (g) => String(g.id) === String(schedule[idx].goalId),
+          );
+          if (gIdx >= 0) {
+            goals[gIdx] = appendProgressLog(goals[gIdx], {
+              delta: 1,
+              note: `Completed: ${String(schedule[idx].title || "task")}`,
+              source: "schedule",
+              scheduleBlockId: String(schedule[idx].id || ""),
+            });
+            ext = { ...ext, goals };
+          }
+        }
         ext = { ...ext, dailySchedule: schedule };
         extDirty = true;
         domains.add("planner");
@@ -252,6 +282,34 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
           action.type === "complete_plan_task"
             ? `Completed: ${String(schedule[idx].title || "task")}`
             : `Updated task: ${String(schedule[idx].title || "task")}`,
+        );
+      }
+      continue;
+    }
+
+    // ── Goal progress (AI / chat) ──────────────────────────────────
+    if (action.type === "update_goal_progress" && action.ok !== false) {
+      const goals = Array.isArray(ext.goals) ? [...(ext.goals as Goal[])] : [];
+      const delta = Number(action.delta);
+      if (!Number.isFinite(delta) || delta === 0) continue;
+      const idx = goals.findIndex((g) => {
+        if (action.id && String(g.id) === String(action.id)) return true;
+        if (!action.match) return false;
+        return String(g.title || "")
+          .toLowerCase()
+          .includes(String(action.match).toLowerCase());
+      });
+      if (idx >= 0) {
+        goals[idx] = appendProgressLog(goals[idx], {
+          delta,
+          note: action.note ? String(action.note) : undefined,
+          source: "ai",
+        });
+        ext = { ...ext, goals };
+        extDirty = true;
+        domains.add("planner");
+        applied.push(
+          `Goal progress: ${delta > 0 ? "+" : ""}${delta} on ${String(goals[idx].title || "goal")}`,
         );
       }
       continue;
@@ -334,6 +392,38 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
         domains.add("planner");
         applied.push(`Deleted ${removed} habit${removed === 1 ? "" : "s"}`);
       }
+      continue;
+    }
+
+    // ── Life Diary writes ──────────────────────────────────────────
+    if (
+      action.type === "add_diary_entry" ||
+      action.type === "add_gratitude" ||
+      action.type === "add_memory" ||
+      action.type === "add_thought"
+    ) {
+      const diary = loadDiary();
+      if (action.type === "add_diary_entry" && action.entry) {
+        diary.entries = [action.entry as Record<string, unknown>, ...(diary.entries || [])];
+        applied.push(`Diary: ${String((action.entry as { title?: string }).title || "Entry")}`);
+      } else if (action.type === "add_gratitude" && action.gratitude) {
+        diary.gratitude = [
+          action.gratitude as Record<string, unknown>,
+          ...(diary.gratitude || []),
+        ];
+        applied.push("Gratitude saved");
+      } else if (action.type === "add_memory" && action.memory) {
+        diary.memories = [action.memory as Record<string, unknown>, ...(diary.memories || [])];
+        applied.push(`Memory: ${String((action.memory as { title?: string }).title || "")}`);
+      } else if (action.type === "add_thought" && action.thought) {
+        diary.thoughts = [action.thought as Record<string, unknown>, ...(diary.thoughts || [])];
+        applied.push("Thought saved");
+      } else {
+        continue;
+      }
+      saveDiary(diary);
+      domains.add("diary");
+      continue;
     }
   }
 
@@ -349,6 +439,11 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
     if (domains.has("gmail")) {
       window.dispatchEvent(new CustomEvent("sybeez:gmail-refresh"));
     }
+    if (domains.has("diary")) {
+      window.dispatchEvent(
+        new CustomEvent("sybeez:data-changed", { detail: { domains: ["diary"] } }),
+      );
+    }
     const summary = applied.join(" · ");
     if (summary) {
       toast.success(summary, { position: "top-center", duration: 3200 });
@@ -356,4 +451,57 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
   }
 
   return applied;
+}
+
+const DIARY_KEY = "sybeez_life_diary";
+
+function loadDiary(): {
+  entries: unknown[];
+  memories: unknown[];
+  thoughts: unknown[];
+  gratitude: unknown[];
+  growthMetrics: unknown[];
+  weeklyReflections: unknown[];
+} {
+  try {
+    const raw = usGetItem(DIARY_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+        memories: Array.isArray(parsed.memories) ? parsed.memories : [],
+        thoughts: Array.isArray(parsed.thoughts) ? parsed.thoughts : [],
+        gratitude: Array.isArray(parsed.gratitude) ? parsed.gratitude : [],
+        growthMetrics: Array.isArray(parsed.growthMetrics) ? parsed.growthMetrics : [],
+        weeklyReflections: Array.isArray(parsed.weeklyReflections)
+          ? parsed.weeklyReflections
+          : [],
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  return {
+    entries: [],
+    memories: [],
+    thoughts: [],
+    gratitude: [],
+    growthMetrics: [],
+    weeklyReflections: [],
+  };
+}
+
+function saveDiary(data: ReturnType<typeof loadDiary>) {
+  usSetItem(DIARY_KEY, JSON.stringify(data));
+  try {
+    window.dispatchEvent(
+      new CustomEvent("sybeez:data-changed", { detail: { key: DIARY_KEY, domains: ["diary"] } }),
+    );
+  } catch {
+    /* ignore */
+  }
+  // Best-effort backend backup
+  void import("@/services/backendApi")
+    .then(({ diaryApi }) => diaryApi.saveData?.(data as never))
+    .catch(() => undefined);
 }

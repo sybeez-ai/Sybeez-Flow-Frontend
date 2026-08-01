@@ -288,6 +288,18 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     });
   }, []);
 
+  // Reload when AI chat writes diary entries
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ key?: string; domains?: string[] }>).detail;
+      if (detail?.key === DIARY_KEY || detail?.domains?.includes("diary")) {
+        setDataState(loadDiaryData());
+      }
+    };
+    window.addEventListener("sybeez:data-changed", onChanged);
+    return () => window.removeEventListener("sybeez:data-changed", onChanged);
+  }, []);
+
   // Local-first: never replace local vaults with empty backend data.
   useEffect(() => {
     let cancelled = false;

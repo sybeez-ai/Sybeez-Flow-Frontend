@@ -1,11 +1,11 @@
 /**
- * Weekly Review — real completed schedules (today / yesterday / week) + AI review.
+ * Weekly Review — day-by-day completed task history + AI review.
+ * One place to see everything finished over past days.
  */
 
 import { useMemo, useState } from "react";
 import {
   Calendar,
-  Target,
   TrendingUp,
   Flame,
   Brain,
@@ -18,6 +18,9 @@ import {
   ArrowRight,
   Download,
   ListTodo,
+  History,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +56,8 @@ interface AIReviewResponse {
   focusAreas: string[];
 }
 
+type HistoryRange = "7" | "14" | "30" | "week" | "lastWeek";
+
 function isoDay(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -61,6 +66,17 @@ function shiftDay(iso: string, delta: number): string {
   const d = new Date(`${iso}T12:00:00`);
   d.setDate(d.getDate() + delta);
   return isoDay(d);
+}
+
+function formatDayLabel(iso: string, today: string, yesterday: string): string {
+  if (iso === today) return "Today";
+  if (iso === yesterday) return "Yesterday";
+  const d = new Date(`${iso}T12:00:00`);
+  return d.toLocaleDateString("en", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 const WeeklyReview = ({
@@ -74,8 +90,9 @@ const WeeklyReview = ({
 }: WeeklyReviewProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [aiReview, setAiReview] = useState<AIReviewResponse | null>(null);
-  const [selectedWeek, setSelectedWeek] = useState<"current" | "last">("current");
+  const [historyRange, setHistoryRange] = useState<HistoryRange>("14");
   const [aiText, setAiText] = useState("");
+  const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
 
   const today = isoDay();
   const yesterday = shiftDay(today, -1);
@@ -99,14 +116,58 @@ const WeeklyReview = ({
     };
   };
 
-  const weekRange = getWeekRange(selectedWeek);
+  const dateRange = useMemo(() => {
+    if (historyRange === "week") return getWeekRange("current");
+    if (historyRange === "lastWeek") return getWeekRange("last");
+    const days = Number(historyRange);
+    return {
+      start: shiftDay(today, -(days - 1)),
+      end: today,
+      label:
+        historyRange === "7"
+          ? "Last 7 days"
+          : historyRange === "14"
+            ? "Last 14 days"
+            : "Last 30 days",
+    };
+  }, [historyRange, today]);
+
+  const weekRange = getWeekRange(
+    historyRange === "lastWeek" ? "last" : "current",
+  );
+
+  /** All completed tasks grouped by completion day (newest first). */
+  const historyByDay = useMemo(() => {
+    const all = (schedule || []).filter((b) => b.isCompleted);
+    const map = new Map<string, DailyScheduleBlock[]>();
+    for (const b of all) {
+      const day = (b.completedAt || "").slice(0, 10) || today;
+      if (day < dateRange.start || day > dateRange.end) continue;
+      const list = map.get(day) || [];
+      list.push(b);
+      map.set(day, list);
+    }
+    const days = Array.from(map.keys()).sort((a, b) => b.localeCompare(a));
+    return days.map((day) => ({
+      day,
+      label: formatDayLabel(day, today, yesterday),
+      blocks: (map.get(day) || []).slice().sort((a, b) =>
+        (a.startTime || "").localeCompare(b.startTime || ""),
+      ),
+    }));
+  }, [schedule, dateRange.start, dateRange.end, today, yesterday]);
+
+  const totalCompletedInRange = historyByDay.reduce(
+    (n, d) => n + d.blocks.length,
+    0,
+  );
 
   const doneBlocks = useMemo(() => {
     const all = (schedule || []).filter((b) => b.isCompleted);
     const byDate = (day: string) =>
-      all.filter((b) => (b.completedAt || today) === day);
+      all.filter((b) => ((b.completedAt || today).slice(0, 10)) === day);
     const week = all.filter((b) => {
-      const d = b.completedAt || today;
+      const d = (b.completedAt || today).slice(0, 10);
       return d >= weekRange.start && d <= weekRange.end;
     });
     return {
@@ -149,23 +210,33 @@ const WeeklyReview = ({
     .sort((a, b) => b.weekCompletions - a.weekCompletions)
     .slice(0, 3);
 
-  const buildDoneSummary = () => {
-    const fmt = (blocks: DailyScheduleBlock[]) =>
-      blocks.length
-        ? blocks.map((b) => `• ${b.title} (${b.startTime}–${b.endTime})`).join("\n")
-        : "• (none yet)";
-    return {
-      todayText: fmt(doneBlocks.today),
-      yesterdayText: fmt(doneBlocks.yesterday),
-      weekText: fmt(doneBlocks.week),
-    };
-  };
+  /** Habit check-ins in the selected history range, by day. */
+  const habitHistoryByDay = useMemo(() => {
+    const map = new Map<string, { name: string; icon?: string }[]>();
+    for (const h of habits || []) {
+      for (const d of h.completedDates || []) {
+        const day = d.slice(0, 10);
+        if (day < dateRange.start || day > dateRange.end) continue;
+        const list = map.get(day) || [];
+        list.push({ name: h.name, icon: h.icon });
+        map.set(day, list);
+      }
+    }
+    return map;
+  }, [habits, dateRange.start, dateRange.end]);
 
   const generateAIReview = async () => {
     setIsLoading(true);
     setAiText("");
     try {
-      const { todayText, yesterdayText, weekText } = buildDoneSummary();
+      const fmt = (blocks: DailyScheduleBlock[]) =>
+        blocks.length
+          ? blocks.map((b) => `• ${b.title} (${b.startTime}–${b.endTime})`).join("\n")
+          : "• (none yet)";
+      const todayText = fmt(doneBlocks.today);
+      const yesterdayText = fmt(doneBlocks.yesterday);
+      const weekText = fmt(doneBlocks.week);
+
       const analyticsData: WeeklyAnalytics = weeklyAnalytics || {
         weekStart: weekRange.start,
         weekEnd: weekRange.end,
@@ -248,7 +319,6 @@ const WeeklyReview = ({
       };
 
       setAiReview(review);
-      // Let the Productivity Coach chat also surface this review
       window.dispatchEvent(
         new CustomEvent("sybeez-planner-review", {
           detail: { text: responseText || formatReviewAsChat(review), week: weekRange.label },
@@ -343,129 +413,167 @@ const WeeklyReview = ({
     ].join("\n");
 
   const exportReport = () => {
-    if (!aiReview) return;
-    const report = `
-WEEKLY PRODUCTIVITY REVIEW
-${weekRange.label}
-${"=".repeat(40)}
-
-GRADE: ${aiReview.weeklyGrade}
-
-SUMMARY
-${aiReview.summary}
-
-COMPLETED TODAY (${doneBlocks.today.length})
-${doneBlocks.today.map((b) => `• ${b.title} (${b.startTime}–${b.endTime})`).join("\n") || "• none"}
-
-COMPLETED YESTERDAY (${doneBlocks.yesterday.length})
-${doneBlocks.yesterday.map((b) => `• ${b.title} (${b.startTime}–${b.endTime})`).join("\n") || "• none"}
-
-COMPLETED THIS WEEK (${doneBlocks.week.length})
-${doneBlocks.week.map((b) => `• ${b.title} (${b.startTime}–${b.endTime})`).join("\n") || "• none"}
-
-HIGHLIGHTS
-${aiReview.highlights.map((h) => `• ${h}`).join("\n")}
-
-AREAS FOR IMPROVEMENT
-${aiReview.improvements.map((i) => `• ${i}`).join("\n")}
-
-RECOMMENDATIONS
-${aiReview.recommendations.map((r) => `• ${r}`).join("\n")}
-    `.trim();
-    const blob = new Blob([report], { type: "text/plain" });
+    const lines = [
+      "COMPLETED TASK HISTORY",
+      dateRange.label,
+      "=".repeat(40),
+      "",
+      `Total completed: ${totalCompletedInRange}`,
+      "",
+      ...historyByDay.flatMap((g) => [
+        `${g.label} (${g.day}) — ${g.blocks.length}`,
+        ...g.blocks.map((b) => `  • ${b.title} (${b.startTime}–${b.endTime})`),
+        "",
+      ]),
+    ];
+    if (aiReview) {
+      lines.push("AI REVIEW", `GRADE: ${aiReview.weeklyGrade}`, "", aiReview.summary);
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `weekly-review-${weekRange.start}.txt`;
+    a.download = `completed-tasks-${dateRange.start}-to-${dateRange.end}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success("Report exported!");
+    toast.success("History exported");
   };
 
-  const DoneList = ({
-    title,
-    blocks,
-    empty,
-  }: {
-    title: string;
-    blocks: DailyScheduleBlock[];
-    empty: string;
-  }) => (
-    <div className="p-3 border border-border rounded-lg bg-black/40">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <ListTodo className="h-4 w-4 text-foreground" />
-          <span className="text-sm font-medium">{title}</span>
-        </div>
-        <Badge variant="outline" className="text-[10px] tabular-nums">
-          {blocks.length}
-        </Badge>
-      </div>
-      {blocks.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{empty}</p>
-      ) : (
-        <ul className="space-y-1.5">
-          {blocks.map((b) => (
-            <li
-              key={b.id}
-              className="flex items-center gap-2 text-sm rounded-md border border-border/50 px-2 py-1.5"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
-              <span className="flex-1 truncate">{b.title}</span>
-              <span className="text-[10px] text-muted-foreground tabular-nums">
-                {b.startTime}–{b.endTime}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+  const toggleDay = (day: string) => {
+    setCollapsedDays((prev) => ({ ...prev, [day]: !prev[day] }));
+  };
+
+  const rangeButtons: { id: HistoryRange; label: string }[] = [
+    { id: "7", label: "7 days" },
+    { id: "14", label: "14 days" },
+    { id: "30", label: "30 days" },
+    { id: "week", label: "This week" },
+    { id: "lastWeek", label: "Last week" },
+  ];
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex gap-2">
+      <div className="rounded-lg border border-border bg-black/30 overflow-hidden">
+        <div className="p-3 border-b border-border/60 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-foreground" />
+              <h3 className="text-sm font-semibold">Completed history</h3>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Everything you marked done — grouped by day
+            </p>
+          </div>
+          <Badge variant="outline" className="text-[10px] tabular-nums shrink-0">
+            {totalCompletedInRange} done
+          </Badge>
+        </div>
+
+        <div className="p-3 flex flex-wrap gap-1.5 border-b border-border/40">
+          {rangeButtons.map((b) => (
+            <Button
+              key={b.id}
+              variant={historyRange === b.id ? "default" : "outline"}
+              size="sm"
+              className="h-7 text-xs px-2.5"
+              onClick={() => setHistoryRange(b.id)}
+            >
+              {b.label}
+            </Button>
+          ))}
           <Button
-            variant={selectedWeek === "current" ? "default" : "outline"}
+            variant="ghost"
             size="sm"
-            onClick={() => setSelectedWeek("current")}
+            className="h-7 text-xs ml-auto"
+            onClick={exportReport}
+            disabled={totalCompletedInRange === 0}
           >
-            This Week
-          </Button>
-          <Button
-            variant={selectedWeek === "last" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setSelectedWeek("last")}
-          >
-            Last Week
+            <Download className="h-3 w-3 mr-1" />
+            Export
           </Button>
         </div>
-        <Badge variant="outline" className="text-xs">
-          <Calendar className="h-3 w-3 mr-1" />
-          {weekRange.label}
-        </Badge>
-      </div>
 
-      {/* Completed schedules — today / yesterday / week */}
-      <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-foreground">Schedules completed</h3>
-        <div className="grid grid-cols-1 gap-2">
-          <DoneList
-            title="Today"
-            blocks={doneBlocks.today}
-            empty="Nothing marked done today yet."
-          />
-          <DoneList
-            title="Yesterday"
-            blocks={doneBlocks.yesterday}
-            empty="No completions logged yesterday."
-          />
-          <DoneList
-            title={`This week (${weekRange.label})`}
-            blocks={doneBlocks.week}
-            empty="No completed schedules this week yet."
-          />
+        <div className="max-h-[min(52vh,420px)] overflow-y-auto p-2 space-y-1.5">
+          {historyByDay.length === 0 ? (
+            <div className="p-6 text-center text-muted-foreground">
+              <CheckCircle2 className="h-10 w-10 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No completed tasks in this range</p>
+              <p className="text-xs mt-1">
+                Mark items done on the Schedule tab — they show up here by day.
+              </p>
+            </div>
+          ) : (
+            historyByDay.map((group) => {
+              const collapsed = !!collapsedDays[group.day];
+              const habitsThatDay = habitHistoryByDay.get(group.day) || [];
+              return (
+                <div
+                  key={group.day}
+                  className="rounded-md border border-border/50 bg-black/40 overflow-hidden"
+                >
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/20 transition-colors"
+                    onClick={() => toggleDay(group.day)}
+                  >
+                    {collapsed ? (
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    )}
+                    <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-sm font-medium flex-1">{group.label}</span>
+                    <span className="text-[10px] text-muted-foreground tabular-nums hidden sm:inline">
+                      {group.day}
+                    </span>
+                    <Badge variant="outline" className="text-[10px] tabular-nums">
+                      {group.blocks.length}
+                    </Badge>
+                  </button>
+                  {!collapsed && (
+                    <ul className="px-2 pb-2 space-y-1">
+                      {group.blocks.map((b) => (
+                        <li
+                          key={b.id}
+                          className="flex items-center gap-2 text-sm rounded-md border border-border/40 px-2 py-1.5"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                          <span className="flex-1 truncate">{b.title}</span>
+                          {b.type && (
+                            <span className="text-[10px] text-muted-foreground capitalize shrink-0">
+                              {b.type}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                            {b.startTime}–{b.endTime}
+                          </span>
+                        </li>
+                      ))}
+                      {habitsThatDay.length > 0 && (
+                        <li className="pt-1 mt-1 border-t border-border/30">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground px-1 mb-1">
+                            Habits checked
+                          </p>
+                          <div className="flex flex-wrap gap-1 px-1">
+                            {habitsThatDay.map((h, i) => (
+                              <Badge
+                                key={`${h.name}-${i}`}
+                                variant="secondary"
+                                className="text-[10px] font-normal"
+                              >
+                                {h.icon ? `${h.icon} ` : ""}
+                                {h.name}
+                              </Badge>
+                            ))}
+                          </div>
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
 
@@ -473,30 +581,25 @@ ${aiReview.recommendations.map((r) => `• ${r}`).join("\n")}
         <div className="p-3 border border-border rounded-lg">
           <div className="flex items-center gap-2 mb-1">
             <CheckCircle2 className="h-4 w-4 text-green-500" />
-            <span className="text-xs text-muted-foreground">Done (week)</span>
+            <span className="text-xs text-muted-foreground">In range</span>
           </div>
-          <p className="text-xl font-bold">
-            {doneBlocks.week.length}
-            <span className="text-sm font-normal text-muted-foreground">
-              /{Math.max(totalTasks, doneBlocks.week.length)}
-            </span>
-          </p>
+          <p className="text-xl font-bold tabular-nums">{totalCompletedInRange}</p>
+        </div>
+        <div className="p-3 border border-border rounded-lg">
+          <div className="flex items-center gap-2 mb-1">
+            <ListTodo className="h-4 w-4 text-blue-500" />
+            <span className="text-xs text-muted-foreground">Today</span>
+          </div>
+          <p className="text-xl font-bold tabular-nums">{doneBlocks.today.length}</p>
         </div>
         <div className="p-3 border border-border rounded-lg">
           <div className="flex items-center gap-2 mb-1">
             <Clock className="h-4 w-4 text-blue-500" />
-            <span className="text-xs text-muted-foreground">Focus Time</span>
+            <span className="text-xs text-muted-foreground">Focus (week)</span>
           </div>
           <p className="text-xl font-bold">
             {Math.round(totalFocusTime / 60)}h {totalFocusTime % 60}m
           </p>
-        </div>
-        <div className="p-3 border border-border rounded-lg">
-          <div className="flex items-center gap-2 mb-1">
-            <Target className="h-4 w-4 text-purple-500" />
-            <span className="text-xs text-muted-foreground">Pomodoros</span>
-          </div>
-          <p className="text-xl font-bold">{totalPomodoros}</p>
         </div>
         <div className="p-3 border border-border rounded-lg">
           <div className="flex items-center gap-2 mb-1">
@@ -615,15 +718,11 @@ ${aiReview.recommendations.map((r) => `• ${r}`).join("\n")}
                 ))}
               </ul>
             </div>
-            <Button variant="outline" size="sm" className="w-full" onClick={exportReport}>
-              <Download className="h-4 w-4 mr-2" />
-              Export Report
-            </Button>
           </div>
         ) : (
           <div className="p-8 text-center text-muted-foreground">
             <Brain className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">Generate a review from your real completed schedules</p>
+            <p className="text-sm">Generate a review from your completed history</p>
             <p className="text-xs mt-1">
               Or ask the Productivity Coach: “Generate my weekly review”
             </p>

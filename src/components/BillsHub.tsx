@@ -26,6 +26,8 @@ import { DATA_CHANGED_EVENT } from "@/services/persistSync";
 import { upsertNotification, scanAndEmitNotifications } from "@/services/notificationService";
 import type { EMI, Insurance, Subscription } from "@/types/lifeManagement";
 import { formatAppMoney, appCurrencySymbol } from "@/services/regionService";
+import { useAppCurrency } from "@/hooks/useAppCurrency";
+import CommitmentsAndPeople from "@/components/CommitmentsAndPeople";
 import { cn } from "@/lib/utils";
 
 type FormKind = "emi" | "insurance" | "subscription" | null;
@@ -169,6 +171,7 @@ const emptyForm = {
 };
 
 export default function BillsHub() {
+  useAppCurrency();
   const [emis, setEmis] = useState<EMI[]>([]);
   const [insurances, setInsurances] = useState<Insurance[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
@@ -548,6 +551,8 @@ export default function BillsHub() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
+        <CommitmentsAndPeople />
+
         {/* EMIs */}
         <Card className="border-border bg-background">
           <CardHeader className="border-b border-border pb-3">

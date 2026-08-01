@@ -34,7 +34,7 @@ import SavingsHub from "@/components/SavingsHub";
 import DailyInOutHub from "@/components/DailyInOutHub";
 import BillsHub from "@/components/BillsHub";
 import FinanceDashboard from "@/components/FinanceDashboard";
-import { formatAppMoney, appCurrencySymbol } from "@/services/regionService";
+import { useAppCurrency } from "@/hooks/useAppCurrency";
 import { 
   EMI, 
   Insurance, 
@@ -45,15 +45,14 @@ import {
   Bill
 } from "@/types/lifeManagement";
 
-const money = (n: number | string) => {
-  const v = typeof n === "string" ? parseFloat(n) : n;
-  return formatAppMoney(Number.isFinite(v) ? (v as number) : 0);
-};
-const moneySym = () => appCurrencySymbol();
+type ViewTab = 'networth' | 'dashboard' | 'daily_inout' | 'bills' | 'charts' | 'investments' | 'savings' | 'reports' | 'currency';
 
 interface FinancialAssistantProps {
   onClose: () => void;
   onSwitchToPlanner?: () => void;
+  /** Controlled tab from URL (`/finance/...`). */
+  activeTab?: ViewTab;
+  onTabChange?: (tab: ViewTab) => void;
 }
 
 // Extended types for new features
@@ -101,7 +100,6 @@ type ExpenseCategory = {
 };
 
 type TimePeriod = 'week' | 'month' | 'year';
-type ViewTab = 'networth' | 'dashboard' | 'daily_inout' | 'bills' | 'charts' | 'investments' | 'savings' | 'reports' | 'currency';
 
 type FormType = 'emi' | 'insurance' | 'subscription' | 'savings' | 'tax' | 'pension' | 'income' | 'expense' | 'credit_score' | 'budget' | 'debt' | 'side_income' | 'asset' | null;
 
@@ -180,7 +178,17 @@ const getCategoryIcon = (category: string, color?: string) => {
   }
 };
 
-const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantProps) => {
+const FinancialAssistant = ({
+  onClose,
+  onSwitchToPlanner,
+  activeTab: controlledTab,
+  onTabChange,
+}: FinancialAssistantProps) => {
+  const { format: formatCurrency, symbol: moneySym } = useAppCurrency();
+  const money = (n: number | string) => {
+    const v = typeof n === "string" ? parseFloat(n) : n;
+    return formatCurrency(Number.isFinite(v) ? (v as number) : 0);
+  };
   const [showAddForm, setShowAddForm] = useState<FormType>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormData>({});
@@ -242,28 +250,18 @@ const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantPr
     return () => clearInterval(interval);
   }, [isConnected]);
 
-  // View & navigation state
-  const [activeViewTab, setActiveViewTab] = useState<ViewTab>(() => {
-    try {
-      const saved = localStorage.getItem("sybeez_finance_tab");
-      if (
-        saved === "dashboard" ||
-        saved === "daily_inout" ||
-        saved === "networth" ||
-        saved === "bills" ||
-        saved === "charts" ||
-        saved === "investments" ||
-        saved === "savings" ||
-        saved === "reports" ||
-        saved === "currency"
-      ) {
-        return saved;
-      }
-    } catch {
-      /* ignore */
-    }
-    return "dashboard";
-  });
+  // View & navigation state (URL-controlled when parent passes activeTab)
+  const [internalTab, setInternalTab] = useState<ViewTab>("dashboard");
+  const activeViewTab = controlledTab ?? internalTab;
+  const setActiveViewTab = useCallback(
+    (tab: ViewTab | ((prev: ViewTab) => ViewTab)) => {
+      const next =
+        typeof tab === "function" ? tab(controlledTab ?? internalTab) : tab;
+      if (onTabChange) onTabChange(next);
+      else setInternalTab(next);
+    },
+    [controlledTab, internalTab, onTabChange],
+  );
   const [extrasHydrated, setExtrasHydrated] = useState(false);
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('month');
   const [selectedPeriodIndex, setSelectedPeriodIndex] = useState(0); // 0 = current period
@@ -408,8 +406,29 @@ const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantPr
   const currentMonthKey = useMemo(() => new Date().toISOString().slice(0, 7), []);
 
   // Calculate Financial Health Score (0-100)
+  // New users with no finance activity start at 0.
   const financialHealthScore = useMemo(() => {
-    let score = 50; // Base score
+    const hasCredit = creditScores.length > 0;
+    const hasSavings =
+      data.savingsPlans.some((s) => (s.currentAmount || 0) > 0) ||
+      (data.savingsItems || []).some((s) => (s.principal || 0) > 0);
+    const hasDebts = debts.length > 0;
+    const hasIncome =
+      sideIncomes.some((s) => s.active && s.monthlyAmount > 0) ||
+      (data.transactions || []).some((t) => t.type === "income" && (Number(t.amount) || 0) > 0);
+    const hasBudgets = budgetCategories.length > 0;
+    const hasBills =
+      (data.bills || []).length > 0 ||
+      (data.emis || []).length > 0 ||
+      (data.peopleMoney || []).length > 0;
+    const hasAssets = assets.length > 0;
+
+    const hasAnyActivity =
+      hasCredit || hasSavings || hasDebts || hasIncome || hasBudgets || hasBills || hasAssets;
+
+    if (!hasAnyActivity) return 0;
+
+    let score = 50; // Baseline once the user has started using Finance
 
     // Credit score factor (max +20)
     const latestCredit = creditScores[creditScores.length - 1];
@@ -425,7 +444,9 @@ const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantPr
 
     // Debt-to-income factor (max +15)
     const totalDebt = debts.reduce((sum, d) => sum + d.remaining, 0);
-    const totalIncome = sideIncomes.filter(s => s.active).reduce((sum, s) => sum + s.monthlyAmount * 12, 0);
+    const totalIncome = sideIncomes
+      .filter((s) => s.active)
+      .reduce((sum, s) => sum + s.monthlyAmount * 12, 0);
     if (totalIncome > 0 && totalDebt < totalIncome * 0.3) {
       score += 15;
     } else if (totalIncome > 0 && totalDebt < totalIncome * 0.5) {
@@ -433,11 +454,11 @@ const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantPr
     }
 
     // Budget adherence factor
-    const overBudgetCount = budgetCategories.filter(b => b.spent > b.limit).length;
+    const overBudgetCount = budgetCategories.filter((b) => b.spent > b.limit).length;
     score -= overBudgetCount * 3;
 
     return Math.max(0, Math.min(100, Math.round(score)));
-  }, [creditScores, data, debts, sideIncomes, budgetCategories]);
+  }, [creditScores, data, debts, sideIncomes, budgetCategories, assets]);
 
   // Monthly side income total
   const totalSideIncome = useMemo(() => {
@@ -1455,7 +1476,7 @@ const FinancialAssistant = ({ onClose, onSwitchToPlanner }: FinancialAssistantPr
                           <option value="savings">Savings</option>
                           <option value="other">Other</option>
                         </select>
-                        <Input type="number" placeholder={`Value (${moneySym()})`} value={formData.assetValue || ""} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, assetValue: e.target.value })} />
+                        <Input type="number" placeholder={`Value (${moneySym})`} value={formData.assetValue || ""} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, assetValue: e.target.value })} />
                         <div className="flex gap-2">
                           <Button size="sm" onClick={handleAddAsset} className="flex-1">Add Asset</Button>
                           <Button size="sm" variant="outline" onClick={resetForm}>Cancel</Button>

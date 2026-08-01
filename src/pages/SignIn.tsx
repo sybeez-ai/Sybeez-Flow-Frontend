@@ -54,7 +54,7 @@ function BrandMark({ failed, onFail, size = "md" }: { failed: boolean; onFail: (
   if (!failed) {
     return (
       <img
-        src="/logo.png?v=6"
+        src="/logo.png?v=7"
         alt=""
         className={cn(box, "object-contain bg-transparent")}
         onError={onFail}
@@ -112,12 +112,13 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
     () => consentCopy(region?.consentKind || "terms_general"),
     [region?.consentKind],
   );
-  const cognitoGoogleOn = Boolean(authConfig?.cognito_google_enabled);
-  const gisGoogleOn = Boolean(
-    !cognitoGoogleOn && (authConfig?.google_client_id || viteGoogleClientId),
-  );
+  // Prefer GIS (works for SPA). Cognito Hosted UI is optional fallback.
   const googleClientId =
     authConfig?.google_client_id || viteGoogleClientId || "";
+  const gisGoogleOn = Boolean(googleClientId);
+  const cognitoGoogleOn = Boolean(authConfig?.cognito_google_enabled && !gisGoogleOn);
+  const isProdBuild =
+    import.meta.env.PROD || import.meta.env.VITE_APP_ENV === "production";
 
   useEffect(() => {
     document.title = `${isSignUp ? "Sign up" : "Sign in"} · Sybeez Flow`;
@@ -149,14 +150,17 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
       setEmailVerified(false);
       setVerificationToken("");
       setOtpCode("");
-      if (res.dev_code) {
+      if (res.dev_code && !isProdBuild) {
         setShownOtp(res.dev_code);
         setOtpCode(res.dev_code);
         toast.success(`Your code is ${res.dev_code}`, { duration: 15000 });
       } else if (res.emailed) {
         toast.success(`Code sent to ${trimmedEmail} — check your inbox`);
+      } else if (res.dev_code && isProdBuild) {
+        // Never surface OTP on production UI
+        toast.success(`Code sent to ${trimmedEmail} — check your inbox`);
       } else {
-        toast.success(res.message || "Code ready");
+        toast.success(res.message || "Check your email for the code");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not send code";
@@ -529,7 +533,7 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
                     <p className="text-[13px] font-medium text-foreground/90">
                       Enter the 6-digit code sent to your email
                     </p>
-                    {shownOtp && (
+                    {shownOtp && !isProdBuild && (
                       <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center">
                         <p className="text-[11px] text-amber-200/80 mb-1">Your verification code</p>
                         <p className="text-2xl font-semibold tracking-[0.35em] text-amber-100 tabular-nums">

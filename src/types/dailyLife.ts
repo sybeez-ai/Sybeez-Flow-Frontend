@@ -75,6 +75,10 @@ export interface DailyScheduleBlock {
   templateKey?: string;
   /** YYYY-MM-DD when the task was marked done. */
   completedAt?: string;
+  /** Linked goal for progress / daily reports */
+  goalId?: string;
+  /** Calendar date this block is for (YYYY-MM-DD). Defaults to today when missing. */
+  date?: string;
 }
 
 export interface DailyLifeData {
@@ -128,6 +132,16 @@ export interface HabitLog {
 }
 
 // ============ GOALS ============
+export interface GoalProgressLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  delta: number;
+  note?: string;
+  source: 'manual' | 'milestone' | 'schedule' | 'ai';
+  milestoneId?: string;
+  scheduleBlockId?: string;
+}
+
 export interface Goal {
   id: string;
   title: string;
@@ -140,6 +154,8 @@ export interface Goal {
   startDate: string;
   endDate: string;
   milestones?: GoalMilestone[];
+  /** Date-wise progress history */
+  progressLogs?: GoalProgressLog[];
   isCompleted: boolean;
   color?: string;
 }

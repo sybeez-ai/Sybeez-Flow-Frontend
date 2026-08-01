@@ -49,6 +49,8 @@ const DEFAULT_RATES: Record<string, number> = {
   BRL: 5.43,
 };
 
+import { usGetItem, usSetItem } from "@/services/userStorage";
+
 const RATES_KEY = "stabee_fx_rates";
 const BASE_KEY = "stabee_base_currency";
 const EVENT = "stabee-currency-updated";
@@ -80,12 +82,20 @@ export const currencyService = {
   },
 
   getBaseCurrency(): string {
-    return localStorage.getItem(BASE_KEY) || "EUR";
+    return usGetItem(BASE_KEY) || localStorage.getItem(BASE_KEY) || "EUR";
   },
 
   setBaseCurrency(code: string) {
-    localStorage.setItem(BASE_KEY, code);
-    window.dispatchEvent(new CustomEvent(EVENT));
+    const next = (code || "").trim().toUpperCase();
+    if (!next) return;
+    usSetItem(BASE_KEY, next);
+    // Keep legacy global key in sync for older readers
+    try {
+      localStorage.setItem(BASE_KEY, next);
+    } catch {
+      /* ignore */
+    }
+    window.dispatchEvent(new CustomEvent(EVENT, { detail: { code: next } }));
   },
 
   getRates(): Record<string, number> {

@@ -1,7 +1,8 @@
 import { usGetItem, usSetItem } from "@/services/userStorage";
-import { useEffect, useState } from "react";
-import { Bot } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import AppSidebar, { AppView } from "@/components/AppSidebar";
+import AppOnboardingTour from "@/components/AppOnboardingTour";
 import HomeDashboard from "@/components/HomeDashboard";
 import FinancialAssistant from "@/components/FinancialAssistant";
 import AssistantPanel from "@/components/AssistantPanel";
@@ -10,9 +11,30 @@ import LifeDiaryEnhanced from "@/components/LifeDiaryEnhanced";
 import GmailIntegrationSidebar from "@/components/GmailIntegrationSidebar";
 import DocumentStorage from "@/components/DocumentStorage";
 import SettingsPanel from "@/components/SettingsPanel";
+import { SYBEEZ_LOGO_SRC } from "@/components/ChatAvatars";
 import { BrowserProvider } from "@/contexts/BrowserContext";
 import { ChatProvider } from "@/contexts/ChatContext";
 import { buildFinanceAssistantContextAsync } from "@/services/financeAssistantContext";
+import { goalSnapshotForAI } from "@/services/goalProgressService";
+import type { Goal } from "@/types/dailyLife";
+import {
+  financeTabFromPath,
+  pathForFinanceTab,
+  pathForPlannerTab,
+  pathForSettingsSection,
+  pathForView,
+  plannerTabFromPath,
+  settingsSectionFromPath,
+  VIEW_TITLES,
+  viewFromPath,
+  type FinanceTabId,
+  type PlannerTabId,
+} from "@/appRoutes";
+import {
+  OPEN_CHAT_SESSION_EVENT,
+  viewForSessionId,
+  type OpenChatSessionDetail,
+} from "@/services/chatSessionStore";
 
 const readJSON = (key: string): unknown => {
   try {
@@ -23,27 +45,21 @@ const readJSON = (key: string): unknown => {
 };
 
 const FINANCE_SYSTEM =
-  "You are the Finance Manager AI inside Sybeez Flow with LIVE access to the user's complete finance data " +
-  "AND their Investment Hub portfolio (live quotes). " +
-  "For investments, stocks, markets, or portfolio questions: ground answers in the user's holdings first, " +
-  "then use web search / scrape / RAG for latest prices and news. " +
-  "FORMAT every reply in Markdown: **bold section headings**, blank line between sections, " +
-  "and emoji bullets when helpful (e.g. 📈 portfolio, 💰 money, ⚠️ risks, ✅ tips, 🏦 savings). " +
-  "Example: **Your portfolio** then a blank line then `- 📈 RELIANCE: …`. " +
-  "For follow-up questions, continue from the prior conversation (same goal, amount, timeline) — do not restart. " +
-  "Reply like ChatGPT: friendly, clear, well-spaced. Never output JSON or raw data dumps. " +
-  "You can also log/update/delete income and expenses from chat when asked. " +
-  "If data is missing, say so briefly.";
+  "You are the Finance Manager agent inside Sybeez Flow. Act — do not only advise. " +
+  "You have LIVE access to complete finance data AND Investment Hub portfolio. " +
+  "When the user asks to log/add/update/delete spend or income, DO IT via actions and confirm. " +
+  "For investments/markets: ground answers in holdings first, then web search/RAG. " +
+  "FORMAT replies in Markdown with clear sections. Never invent balances. " +
+  "Reply like ChatGPT: friendly, clear. Never output JSON to the user.";
 
 const PLANNER_SYSTEM =
-  "You are an expert productivity and life coach inside the Sybeez Flow app. " +
-  "You can CREATE, READ, UPDATE and DELETE plan tasks and habits from chat " +
-  "(e.g. 'make a plan…', 'show my plan', 'mark gym as done', 'delete deep work', 'clear my plan'). " +
-  "When the user asks to generate a weekly review / review my week / generate review: " +
-  "use scheduleReview in context (completed today, yesterday, and this week). " +
-  "Ground the review ONLY in those completed schedules — never invent fake wins. " +
-  "Format with Markdown: **Summary**, **Grade** (A–F), **Highlights**, **Areas to improve**, **Recommendations**. " +
-  "Be concise, encouraging and practical. Confirm what you changed.";
+  "You are the Productivity Coach agent inside Sybeez Flow. Act on requests. " +
+  "CREATE/READ/UPDATE/DELETE plan tasks, habits, and goal progress from chat. " +
+  "Examples: make a plan, show my plan, mark gym done, delete a task, clear my plan, log goal progress. " +
+  "Goals: use goalProgress only — never invent numbers. " +
+  "Goal plans: date-wise plan + add_plan_tasks with goalId. " +
+  "Weekly review: use scheduleReview + goalProgress facts only. " +
+  "Confirm every change you made. Be concise and practical.";
 
 const FINANCE_SUGGESTIONS = [
   "How is my portfolio doing?",
@@ -53,10 +69,10 @@ const FINANCE_SUGGESTIONS = [
 ];
 
 const PLANNER_SUGGESTIONS = [
+  "Give me today's daily goal report",
+  "How much progress on my goals?",
+  "Create a plan for my active goals and add today's tasks",
   "Generate my weekly review",
-  "Show my plan",
-  "Mark deep work as done",
-  "Plan my day: deep work 9-11, gym 18-19",
 ];
 
 function isoLocalDay(d = new Date()): string {
@@ -72,11 +88,14 @@ function buildPlannerAssistantContext(): Record<string, unknown> {
       endTime?: string;
       isCompleted?: boolean;
       completedAt?: string;
+      goalId?: string;
+      date?: string;
     }>;
     habits?: unknown[];
-    goals?: unknown[];
+    goals?: Goal[];
   } | null;
   const schedule = Array.isArray(planner?.dailySchedule) ? planner!.dailySchedule! : [];
+  const goals = Array.isArray(planner?.goals) ? planner!.goals! : [];
   const today = isoLocalDay();
   const y = new Date();
   y.setDate(y.getDate() - 1);
@@ -101,11 +120,23 @@ function buildPlannerAssistantContext(): Record<string, unknown> {
     const d = b.completedAt || today;
     return d >= weekStart && d <= today;
   });
+  const goalProgress = goalSnapshotForAI(goals);
+  const goalLinkedToday = schedule.filter(
+    (b) => b.goalId && (!b.date || b.date === today),
+  );
 
   return {
     feature: "planner",
     life: readJSON("life_management_data"),
     planner,
+    goalProgress,
+    goalScheduleToday: goalLinkedToday.map((b) => ({
+      title: b.title,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      goalId: b.goalId,
+      isCompleted: b.isCompleted,
+    })),
     scheduleReview: {
       today,
       yesterday,
@@ -123,25 +154,27 @@ function buildPlannerAssistantContext(): Record<string, unknown> {
 }
 
 const DIARY_SYSTEM =
-  "You are a thoughtful personal life companion inside the Sybeez Flow app. " +
-  "Help the user reflect on their life, process emotions, gain insights, and celebrate achievements. " +
-  "Be empathetic, insightful and encouraging. Ask thoughtful questions when appropriate.";
+  "You are the Life Diary companion agent inside Sybeez Flow. " +
+  "When the user shares feelings, a day story, or asks to log/save/write to diary: " +
+  "organize their words into a structured diary entry (title, content, mood, energy, " +
+  "highlights, challenges, focusTomorrow) and SAVE it — then confirm. " +
+  "Grateful phrases → gratitude. Lasting moments → memories. Ideas/dreams → thoughts. " +
+  "For pure reflection questions with no content to save, coach empathetically. " +
+  "Never invent past entries. Keep replies warm and short.";
 
 const DIARY_SUGGESTIONS = [
+  "Today I felt stressed at work but proud I finished my tasks",
+  "I'm grateful for my health and my family",
+  "Show my recent diary entries",
   "Help me reflect on today",
-  "What did I learn?",
-  "How can I feel better?",
-  "Celebrate my wins",
 ];
 
 const GMAIL_SYSTEM =
-  "You are the Email Assistant inside Sybeez Flow with LIVE Gmail access. " +
-  "The user may have multiple Gmail accounts — always use the active_account / account_email " +
-  "and the selected email's accountId so actions hit the correct inbox. " +
-  "You can search mail, create labels, organize mail with auto-filing rules " +
-  "(from sender or promotions category → label), draft replies, and send replies. " +
-  "When the user asks to reply, draft the reply in chat first — do not send until they confirm. " +
-  "Also surface renewals/meetings so nothing is missed. Be concise and confirm which account you used.";
+  "You are the Email Assistant agent inside Sybeez Flow with LIVE Gmail access. Act on requests. " +
+  "Always use active_account / account_email and the selected email's accountId. " +
+  "You can search mail, create labels, auto-filing rules, draft replies, and send replies. " +
+  "Reply drafts first — send only when the user confirms. " +
+  "Surface renewals/meetings. Confirm which account you used.";
 
 const GMAIL_SUGGESTIONS = [
   "Show my unread emails",
@@ -151,35 +184,35 @@ const GMAIL_SUGGESTIONS = [
 ];
 
 const VIEW_KEY = "sybeez_active_view";
-const VALID_VIEWS: AppView[] = [
-  "home",
-  "finance",
-  "planner",
-  "diary",
-  "gmail",
-  "documents",
-  "settings",
-];
 
 const Index = () => {
-  const [view, setView] = useState<AppView>(() => {
-    try {
-      const saved = usGetItem(VIEW_KEY) as AppView | null;
-      if (saved && VALID_VIEWS.includes(saved)) return saved;
-    } catch {
-      /* ignore */
-    }
-    return "home";
-  });
+  const location = useLocation();
+  const routerNavigate = useNavigate();
+  const view = useMemo<AppView>(
+    () => viewFromPath(location.pathname) || "home",
+    [location.pathname],
+  );
+  const financeTab = useMemo(
+    () => financeTabFromPath(location.pathname),
+    [location.pathname],
+  );
+  const plannerTab = useMemo(
+    () => plannerTabFromPath(location.pathname),
+    [location.pathname],
+  );
+  const settingsSection = useMemo(
+    () => settingsSectionFromPath(location.pathname),
+    [location.pathname],
+  );
+
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState("account");
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
 
   useEffect(() => {
-    document.title = "Sybeez Flow";
-  }, []);
+    document.title = VIEW_TITLES[view] || "Sybeez Flow";
+  }, [view]);
 
-  // Persist active module (Finance Dashboard, Planner, …) across reloads
+  // Keep legacy local key in sync (other code may still read it)
   useEffect(() => {
     try {
       usSetItem(VIEW_KEY, view);
@@ -188,14 +221,17 @@ const Index = () => {
     }
   }, [view]);
 
-  // Return from Gmail Google OAuth → open Gmail Manager
+  // Gmail OAuth may land on /?gmail=connected — canonicalize to /gmail
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("gmail") === "connected" || params.get("gmail") === "error") {
-      setView("gmail");
+    const params = new URLSearchParams(location.search);
+    const gmail = params.get("gmail");
+    if (gmail === "connected" || gmail === "error") {
+      if (location.pathname !== "/gmail") {
+        routerNavigate(`/gmail${location.search}`, { replace: true });
+      }
       setIsAssistantOpen(true);
     }
-  }, []);
+  }, [location.pathname, location.search, routerNavigate]);
 
   // Open the assistant automatically when entering Finance, Life Planner, Diary or Gmail.
   useEffect(() => {
@@ -206,11 +242,35 @@ const Index = () => {
     }
   }, [view]);
 
-  const goHome = () => setView("home");
+  // History / deep-links into a chat session → navigate to that module URL
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent<OpenChatSessionDetail>).detail;
+      if (!detail?.sessionId) return;
+      const target = viewForSessionId(detail.sessionId);
+      routerNavigate(pathForView(target));
+      setIsAssistantOpen(true);
+    };
+    window.addEventListener(OPEN_CHAT_SESSION_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CHAT_SESSION_EVENT, onOpen);
+  }, [routerNavigate]);
+
+  const goHome = () => routerNavigate("/");
 
   const navigate = (next: AppView) => {
-    setView(next);
-    if (next === "settings") setSettingsSection("account");
+    routerNavigate(pathForView(next));
+  };
+
+  const setFinanceTab = (tab: FinanceTabId) => {
+    routerNavigate(pathForFinanceTab(tab));
+  };
+
+  const setPlannerTab = (tab: PlannerTabId) => {
+    routerNavigate(pathForPlannerTab(tab));
+  };
+
+  const setSettingsSection = (section: string) => {
+    routerNavigate(pathForSettingsSection(section));
   };
 
   // Diary always keeps Life Companion pinned on the right.
@@ -222,6 +282,7 @@ const Index = () => {
     <ChatProvider>
       <BrowserProvider>
         <div className="h-screen flex bg-background text-foreground overflow-hidden">
+          <AppOnboardingTour />
           {/* Persistent application sidebar */}
           <AppSidebar
             activeView={view}
@@ -232,52 +293,69 @@ const Index = () => {
           />
 
           {/* Main content area */}
-          <main className="flex-1 overflow-hidden relative min-w-0">
-            {view === "settings" ? (
-              <SettingsPanel
-                isOpen
-                onClose={goHome}
-                initialSection={settingsSection}
-                inline
-              />
-            ) : view === "finance" ? (
-              <FinancialAssistant
-                onClose={goHome}
-                onSwitchToPlanner={() => navigate("planner")}
-              />
-            ) : view === "planner" ? (
-              <DailyLifePlanner
-                onClose={goHome}
-                onSwitchToFinance={() => navigate("finance")}
-              />
-            ) : view === "diary" ? (
-              <LifeDiaryEnhanced
-                onClose={goHome}
-              />
-            ) : view === "gmail" ? (
-              <GmailIntegrationSidebar
-                onClose={goHome}
-              />
-            ) : view === "documents" ? (
-              <DocumentStorage
-                onClose={goHome}
-              />
-            ) : (
-              <HomeDashboard
-                onOpenFinance={() => navigate("finance")}
-                onOpenPlanner={() => navigate("planner")}
-              />
-            )}
+          <main className="flex-1 overflow-hidden min-w-0 flex flex-col">
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {view === "settings" ? (
+                <SettingsPanel
+                  isOpen
+                  onClose={goHome}
+                  initialSection={settingsSection}
+                  onSectionChange={setSettingsSection}
+                  inline
+                />
+              ) : view === "finance" ? (
+                <FinancialAssistant
+                  onClose={goHome}
+                  onSwitchToPlanner={() => navigate("planner")}
+                  activeTab={financeTab}
+                  onTabChange={setFinanceTab}
+                />
+              ) : view === "planner" ? (
+                <DailyLifePlanner
+                  onClose={goHome}
+                  onSwitchToFinance={() => navigate("finance")}
+                  activeTab={plannerTab}
+                  onTabChange={setPlannerTab}
+                />
+              ) : view === "diary" ? (
+                <LifeDiaryEnhanced
+                  onClose={goHome}
+                />
+              ) : view === "gmail" ? (
+                <GmailIntegrationSidebar
+                  onClose={goHome}
+                />
+              ) : view === "documents" ? (
+                <DocumentStorage
+                  onClose={goHome}
+                />
+              ) : (
+                <HomeDashboard
+                  onOpenFinance={() => navigate("finance")}
+                  onOpenPlanner={() => navigate("planner")}
+                />
+              )}
+            </div>
 
-            {/* Floating button to reopen the assistant when it's closed */}
+            {/* Reserved dock — never overlays page content */}
             {(view === "finance" || view === "planner" || view === "gmail") && !isAssistantOpen && (
-              <button
-                onClick={() => setIsAssistantOpen(true)}
-                className="absolute bottom-6 right-6 z-40 flex items-center gap-2 px-4 py-3 bg-foreground text-background rounded-full shadow-xl hover:scale-105 transition-all duration-200 border border-border/30"
+              <div
+                className="flex-none flex items-center justify-end px-4 py-2.5"
+                style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}
               >
-                <Bot className="h-5 w-5" />
-                <span className="text-sm font-medium">Ask AI</span>
-              </button>
+                <button
+                  onClick={() => setIsAssistantOpen(true)}
+                  className="flex items-center gap-2 px-3.5 py-2 rounded-full border border-border/50 bg-card/90 backdrop-blur-md text-foreground transition-all duration-200 hover:bg-white/[0.06] hover:scale-[1.02]"
+                  title="ASK AI"
+                >
+                  <img
+                    src={SYBEEZ_LOGO_SRC}
+                    alt="Sybeez"
+                    className="h-7 w-7 rounded-full object-contain"
+                  />
+                  <span className="text-sm font-semibold tracking-wide pr-1">ASK AI</span>
+                </button>
+              </div>
             )}
           </main>
 
@@ -318,7 +396,7 @@ const Index = () => {
               system={DIARY_SYSTEM}
               sessionId="diary-assistant"
               placeholder="Share your thoughts…"
-              emptyHint="Ask me anything about your life — reflect on your day, process emotions, or gain insights."
+              emptyHint="Share a sentence about your day — I’ll organize it into your diary. Or ask for reflection."
               suggestions={DIARY_SUGGESTIONS}
               getContext={() => ({
                 feature: "diary",
