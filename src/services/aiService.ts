@@ -124,6 +124,8 @@ export async function askAIDetailed(
 
   // Keep `message` as the user's raw text so LangGraph intent routing works.
   // System prompt + history travel in `context`.
+  let backendAuthFailed = false;
+  let backendHttpError = "";
   try {
     const res = await fetch(`${API_URL}/api/chat`, {
       method: "POST",
@@ -152,40 +154,78 @@ export async function askAIDetailed(
           intent: (json?.data ?? json)?.intent,
         };
       }
+      backendHttpError = "The AI returned an empty response. Please try again.";
+    } else {
+      let detail = "";
+      try {
+        const errJson = await res.json();
+        detail =
+          typeof errJson?.detail === "string"
+            ? errJson.detail
+            : typeof errJson?.error === "string"
+              ? errJson.error
+              : "";
+      } catch {
+        /* ignore */
+      }
+      if (res.status === 401 || res.status === 403) {
+        backendAuthFailed = true;
+        return {
+          text:
+            detail ||
+            "Your session expired. Please sign out and sign in again, then retry ASK AI.",
+          actions: [],
+        };
+      }
+      backendHttpError =
+        detail || `AI service error (${res.status}). Please try again in a moment.`;
     }
   } catch (err) {
     if ((err as Error)?.name === "AbortError") throw err;
-    // fall through to Perplexity
+    // fall through to Perplexity only for network failures
   }
 
-  // Fallback: client-side Perplexity (no agentic writes)
-  try {
-    const messages: PerplexityMessage[] = [];
-    let systemText = system || "";
-    // Keep snapshot out of the user-visible echo path — only brief instruction
-    if (snap && typeof snap === "object") {
-      systemText =
-        (systemText ? systemText + "\n\n" : "") +
-        "Answer in friendly plain English only. Never output JSON. " +
-        "Use these facts:\n" +
-        JSON.stringify(snap).slice(0, 6000);
-    }
-    if (systemText) messages.push({ role: "system", content: systemText });
-    for (const h of history) messages.push({ role: h.role, content: h.content });
-    const text = await searchWithPerplexity(prompt, messages);
-    return { text: sanitizeAssistantText(text, snap), actions: [] };
-  } catch {
-    if (snap && typeof snap === "object") {
-      return {
-        text: formatFinanceOverview(snap as Record<string, unknown>),
-        actions: [],
-      };
-    }
+  if (backendAuthFailed) {
     return {
-      text: "I couldn't reach the AI service right now. Please check your connection and try again.",
+      text: "Your session expired. Please sign out and sign in again, then retry ASK AI.",
       actions: [],
     };
   }
+
+  // Fallback: client-side Perplexity (no agentic writes) — skipped in production builds
+  const allowPerplexityFallback = !import.meta.env.PROD;
+  if (allowPerplexityFallback) {
+    try {
+      const messages: PerplexityMessage[] = [];
+      let systemText = system || "";
+      if (snap && typeof snap === "object") {
+        systemText =
+          (systemText ? systemText + "\n\n" : "") +
+          "Answer in friendly plain English only. Never output JSON. " +
+          "Use these facts:\n" +
+          JSON.stringify(snap).slice(0, 6000);
+      }
+      if (systemText) messages.push({ role: "system", content: systemText });
+      for (const h of history) messages.push({ role: h.role, content: h.content });
+      const text = await searchWithPerplexity(prompt, messages);
+      return { text: sanitizeAssistantText(text, snap), actions: [] };
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (snap && typeof snap === "object") {
+    return {
+      text: formatFinanceOverview(snap as Record<string, unknown>),
+      actions: [],
+    };
+  }
+  return {
+    text:
+      backendHttpError ||
+      "I couldn't reach the AI service right now. Please check your connection and try again.",
+    actions: [],
+  };
 }
 
 /**
