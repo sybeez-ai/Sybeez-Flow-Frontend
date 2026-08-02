@@ -138,10 +138,11 @@ export function formatFinanceOverview(snap: Record<string, unknown>): string {
 
   lines.push("## 🧮 Net position");
   lines.push("");
+  // totals.assets already includes savings + portfolio from computeFinanceRollup
   const assets =
-    (Number(totals.assets) || 0) +
+    Number(totals.assets) ||
     (Number(totals.savings) || 0) +
-    (Number(totals.portfolioCurrent) || Number(portfolio.total_current) || 0);
+      (Number(totals.portfolioCurrent) || Number(portfolio.total_current) || 0);
   lines.push(`- **Assets / savings / portfolio:** ${money(assets, currency)}`);
   lines.push(`- **Liabilities:** ${money(totals.liabilities, currency)}`);
   lines.push(`- ✅ **Approx. net worth:** ${money(totals.netWorthApprox, currency)}`);

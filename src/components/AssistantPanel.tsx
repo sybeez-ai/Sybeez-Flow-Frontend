@@ -20,7 +20,7 @@ import { SybeezChatAvatar, UserChatAvatar } from "@/components/ChatAvatars";
 import InvestmentAnalyticsChart, {
   type InvestmentAnalyticsPayload,
 } from "@/components/InvestmentAnalyticsChart";
-import { currentUserId, usGetItem, usRemoveItem, usSetItem, userSessionId } from "@/services/userStorage";
+import { currentUserId, usGetItem, usGetJSON, usRemoveItem, usSetItem, usSetJSON, userSessionId } from "@/services/userStorage";
 import { USER_SCOPE_CHANGED_EVENT } from "@/services/persistSync";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +28,54 @@ const PANEL_WIDTH_KEY = "sybeez_assistant_panel_width";
 const DEFAULT_PANEL_WIDTH = 420;
 const MIN_PANEL_WIDTH = 300;
 const MAX_PANEL_WIDTH = 720;
+
+function analyticsStoreKey(sessionId: string): string {
+  return `chat_analytics_v1:${userSessionId(sessionId)}`;
+}
+
+function contentFingerprint(content: string): string {
+  // Stable enough to reattach charts after reload for the same reply text
+  let h = 0;
+  const s = (content || "").slice(0, 400);
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return `${s.length}:${h}`;
+}
+
+function saveMessageAnalytics(
+  sessionId: string,
+  messages: ChatMessage[],
+): void {
+  try {
+    const map: Record<string, InvestmentAnalyticsPayload> = {};
+    for (const m of messages) {
+      if (m.role !== "assistant" || !m.analytics || m.analytics.empty) continue;
+      map[contentFingerprint(m.content)] = m.analytics;
+    }
+    usSetJSON(analyticsStoreKey(sessionId), map);
+  } catch {
+    /* ignore */
+  }
+}
+
+function attachStoredAnalytics(
+  sessionId: string,
+  messages: ChatMessage[],
+): ChatMessage[] {
+  try {
+    const map = usGetJSON<Record<string, InvestmentAnalyticsPayload>>(
+      analyticsStoreKey(sessionId),
+      {},
+    );
+    if (!map || typeof map !== "object" || !Object.keys(map).length) return messages;
+    return messages.map((m) => {
+      if (m.role !== "assistant" || m.analytics) return m;
+      const hit = map[contentFingerprint(m.content)];
+      return hit ? { ...m, analytics: hit } : m;
+    });
+  } catch {
+    return messages;
+  }
+}
 
 function clampPanelWidth(width: number) {
   const viewportCap =
@@ -232,7 +280,7 @@ const AssistantPanel = ({
       const stored = await loadChatSession(activeSessionId);
       if (cancelled) return;
       if (stored.length) {
-        setMessages(stored);
+        setMessages(attachStoredAnalytics(activeSessionId, stored));
       } else {
         setMessages([]);
       }
@@ -422,6 +470,7 @@ const AssistantPanel = ({
         },
       ];
       setMessages(withAssistant);
+      saveMessageAnalytics(activeSessionId, withAssistant);
       if (baseSessionId === "gmail-assistant") {
         const draftAction = actions.find(
           (a) => a.type === "gmail_draft_reply" && a.ok && a.draft_text,

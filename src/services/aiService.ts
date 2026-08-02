@@ -55,6 +55,13 @@ function wantsPortfolioOverview(prompt: string): boolean {
   );
 }
 
+/** These need backend finance_intel charts — never short-circuit on the client. */
+function wantsInvestmentAnalytics(prompt: string): boolean {
+  return /\b(analytics|charts?|live analytics|past performance|performance report|projection|look like|forecast|6 months|investments with)\b/i.test(
+    prompt,
+  );
+}
+
 /** Pull the assistant text out of the backend's `format_response` envelope. */
 function extractBackendText(payload: any, financeSnapshot?: unknown): string | null {
   if (!payload) return null;
@@ -100,9 +107,12 @@ export async function askAIDetailed(
     isFinance;
 
   // Instant overview only on a fresh thread — never skip the LLM on follow-ups
+  // or when the user asked for live investment analytics / charts.
   const hasPriorTurns = Array.isArray(history) && history.length > 0;
+  const wantsCharts = wantsInvestmentAnalytics(prompt);
   if (
     !hasPriorTurns &&
+    !wantsCharts &&
     isFinance &&
     snap &&
     typeof snap === "object" &&
@@ -113,6 +123,7 @@ export async function askAIDetailed(
   }
   if (
     !hasPriorTurns &&
+    !wantsCharts &&
     isFinance &&
     snap &&
     typeof snap === "object" &&

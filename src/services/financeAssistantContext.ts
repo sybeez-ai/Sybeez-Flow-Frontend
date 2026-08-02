@@ -261,13 +261,13 @@ export function buildFinanceAssistantContextSync(
           day_pl: 0,
           day_pl_pct: 0,
         },
-    assets: assets.map((a: any) => ({
+    assets: (Array.isArray(extras.assets) ? extras.assets : []).map((a: any) => ({
       id: a.id,
       name: a.name,
       type: a.type,
       value: num(a.value),
     })),
-    debts: debts.map((d: any) => ({
+    debts: (Array.isArray(extras.debts) ? extras.debts : []).map((d: any) => ({
       id: d.id,
       name: d.name,
       type: d.type,
