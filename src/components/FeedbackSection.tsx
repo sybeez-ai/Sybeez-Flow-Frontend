@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  CheckCircle2,
   ChevronRight,
   Loader2,
   MessageSquareHeart,
@@ -197,7 +198,7 @@ export default function FeedbackSection() {
         open={open}
         onOpenChange={(v) => {
           if (!v) closeForm();
-          else if (!submitted) setOpen(true);
+          else setOpen(true);
         }}
       >
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto sm:rounded-2xl p-0 gap-0">
@@ -225,8 +226,8 @@ export default function FeedbackSection() {
                     Product feedback
                   </DialogTitle>
                   <DialogDescription>
-                    One submission per account. After you send it, you won’t see
-                    the answers again.
+                    You can send feedback anytime. Each response is saved and
+                    emailed to the Sybeez team.
                   </DialogDescription>
                 </DialogHeader>
               </div>

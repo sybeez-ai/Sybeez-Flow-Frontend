@@ -53,11 +53,18 @@ export async function fetchFeedbackStatus(): Promise<FeedbackStatus> {
 }
 
 export async function submitFeedback(body: FeedbackSubmitBody): Promise<void> {
-  const res = await fetch(`${BASE()}/submit`, {
-    method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE()}/submit`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error(
+      "Could not reach the API. Make sure the backend is running on localhost:8000.",
+    );
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(
