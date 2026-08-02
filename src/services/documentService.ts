@@ -5,9 +5,9 @@
  * Local IndexedDB is only used to migrate old offline files once, then cleared.
  *
  * S3 layout:
- *   users/{name}__{email}__{user_id}/_profile.json
- *   users/{name}__{email}__{user_id}/folders/...
- *   users/{name}__{email}__{user_id}/files/{id}/...
+ *   users/{user_id}/_profile.json
+ *   users/{user_id}/folders/...
+ *   users/{user_id}/files/{id}/...
  */
 
 import { getApiBase } from "@/services/apiBase";
@@ -66,6 +66,8 @@ let dbOwnerKey: string | null = null;
 let openDbHandle: IDBDatabase | null = null;
 let lastStatus: DocumentsCloudStatus | null = null;
 let migratePromise: Promise<void> | null = null;
+let readyCache: { at: number; uid: string; status: DocumentsCloudStatus } | null = null;
+const READY_TTL_MS = 45_000;
 
 function scopeKey(): string {
   return (currentUserId() || "anon").trim() || "anon";
@@ -183,6 +185,7 @@ export function deleteUserDocumentsDatabase(userId: string): void {
   }
   lastStatus = null;
   migratePromise = null;
+  readyCache = null;
 }
 
 export function resetDocumentDbConnection(): void {
@@ -196,6 +199,7 @@ export function resetDocumentDbConnection(): void {
   dbOwnerKey = null;
   lastStatus = null;
   migratePromise = null;
+  readyCache = null;
 }
 
 if (typeof window !== "undefined") {
@@ -373,8 +377,17 @@ async function doMigrateLocalToCloud(): Promise<void> {
   }
 }
 
-async function ensureCloudReady(): Promise<DocumentsCloudStatus> {
+async function ensureCloudReady(force = false): Promise<DocumentsCloudStatus> {
   requireSignedIn();
+  const uid = scopeKey();
+  if (
+    !force &&
+    readyCache &&
+    readyCache.uid === uid &&
+    Date.now() - readyCache.at < READY_TTL_MS
+  ) {
+    return readyCache.status;
+  }
   const data = await apiJSON<DocumentsCloudStatus>("/status");
   if (!data.configured) {
     throw new Error(
@@ -388,6 +401,7 @@ async function ensureCloudReady(): Promise<DocumentsCloudStatus> {
     );
   }
   lastStatus = data;
+  readyCache = { at: Date.now(), uid, status: data };
   await migrateLocalToCloud();
   return data;
 }
@@ -451,9 +465,21 @@ export const documentService = {
   },
 
   async addDocument(file: File, folderId: string | null = null): Promise<DocMeta> {
+    // Warm vault once (cached); skip re-hitting /status on every file in a batch
     await ensureCloudReady();
     const data = await apiUpload<{ document: Record<string, unknown> }>(file, folderId);
     return normalizeMeta(data.document);
+  },
+
+  /** Upload many files with a single cloud readiness check. */
+  async addDocuments(files: File[], folderId: string | null = null): Promise<DocMeta[]> {
+    await ensureCloudReady();
+    const out: DocMeta[] = [];
+    for (const file of files) {
+      const data = await apiUpload<{ document: Record<string, unknown> }>(file, folderId);
+      out.push(normalizeMeta(data.document));
+    }
+    return out;
   },
 
   async getBlob(id: string): Promise<Blob | null> {
