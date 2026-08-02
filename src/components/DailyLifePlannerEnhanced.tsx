@@ -1,5 +1,5 @@
-import { usGetItem, usSetItem } from "@/services/userStorage";
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usGetItem, usSetItem, currentUserId } from "@/services/userStorage";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import {
   ListTodo, Plus, X, CheckCircle2, Circle, TrendingUp, RefreshCw,
   Flame, Target, Zap, Smile, BookOpen, BarChart2, CalendarDays,
   ClipboardList, Download, Upload, Trash2,
-  Database, Shield, Check
+  Database, Shield, Check, FileBarChart2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -26,7 +26,8 @@ import {
   ExtendedDailyLifeData,
 } from "@/types/dailyLife";
 import { cn } from "@/lib/utils";
-import { toggleMilestoneSynced, appendProgressLog } from "@/services/goalProgressService";
+import { toggleMilestoneSynced, appendProgressLog, removeScheduleProgressLog } from "@/services/goalProgressService";
+import { localISODay, shiftLocalDay, daysBetween } from "@/utils/dateUtils";
 import {
   HabitTracker,
   GoalTracker,
@@ -35,12 +36,12 @@ import {
   DailyJournal,
   ProductivityAnalytics,
   WeeklyReview,
+  PlannerReports,
   ProductivityCalendar,
 } from "@/components/life_planner";
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
 const EXT_KEY = "sybeez_extended_life_data";
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function hasPlannerContent(data: ExtendedDailyLifeData | null | undefined): boolean {
   if (!data) return false;
@@ -49,35 +50,6 @@ function hasPlannerContent(data: ExtendedDailyLifeData | null | undefined): bool
     (data.habits?.length ?? 0) > 0 ||
     (data.goals?.length ?? 0) > 0
   );
-}
-
-async function loadDataFromBackend(): Promise<ExtendedDailyLifeData | null> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/features/planner/data`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!response.ok) return null;
-    const json = await response.json();
-    // Ignore empty backend blobs so we never wipe local schedule
-    if (!hasPlannerContent(json)) return null;
-    return json as ExtendedDailyLifeData;
-  } catch {
-    return null;
-  }
-}
-
-async function saveDataToBackend(data: ExtendedDailyLifeData): Promise<boolean> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/features/planner/data`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
 const DEFAULT_POMODORO_SETTINGS: PomodoroSettings = {
   workDuration: 25,
@@ -90,13 +62,7 @@ const DEFAULT_POMODORO_SETTINGS: PomodoroSettings = {
   notificationsEnabled: true,
 };
 
-function loadExtData(): ExtendedDailyLifeData {
-  try {
-    const raw = usGetItem(EXT_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    /* fall through to defaults */
-  }
+function emptyExtData(): ExtendedDailyLifeData {
   return {
     gymSchedules: [],
     hygieneRoutines: [],
@@ -107,7 +73,7 @@ function loadExtData(): ExtendedDailyLifeData {
     preferences: {},
     habits: [],
     goals: [],
-    pomodoroSettings: DEFAULT_POMODORO_SETTINGS,
+    pomodoroSettings: { ...DEFAULT_POMODORO_SETTINGS },
     pomodoroHistory: [],
     calendarEvents: [],
     analytics: [],
@@ -115,6 +81,57 @@ function loadExtData(): ExtendedDailyLifeData {
     journal: [],
     aiCoachingHistory: [],
   };
+}
+
+function normalizeExtData(raw: unknown): ExtendedDailyLifeData {
+  const base = emptyExtData();
+  if (!raw || typeof raw !== "object") return base;
+  const o = raw as Record<string, unknown>;
+  const asArr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  const habits = asArr<Habit>(o.habits).map((h) => ({
+    ...h,
+    completedDates: Array.isArray(h?.completedDates) ? h.completedDates : [],
+  }));
+  const goals = asArr<Goal>(o.goals).map((g) => ({
+    ...g,
+    milestones: Array.isArray(g?.milestones) ? g.milestones : [],
+    progressLogs: Array.isArray(g?.progressLogs) ? g.progressLogs : [],
+  }));
+  return {
+    ...base,
+    ...o,
+    gymSchedules: asArr(o.gymSchedules),
+    hygieneRoutines: asArr(o.hygieneRoutines),
+    mealPlans: asArr(o.mealPlans),
+    mentalHealthSchedules: asArr(o.mentalHealthSchedules),
+    workBlocks: asArr(o.workBlocks),
+    dailySchedule: asArr(o.dailySchedule),
+    preferences: o.preferences && typeof o.preferences === "object" ? (o.preferences as object) : {},
+    habits,
+    goals,
+    pomodoroSettings: {
+      ...DEFAULT_POMODORO_SETTINGS,
+      ...(o.pomodoroSettings && typeof o.pomodoroSettings === "object"
+        ? (o.pomodoroSettings as PomodoroSettings)
+        : {}),
+    },
+    pomodoroHistory: asArr(o.pomodoroHistory),
+    calendarEvents: asArr(o.calendarEvents),
+    analytics: asArr(o.analytics),
+    moodHistory: asArr(o.moodHistory),
+    journal: asArr(o.journal),
+    aiCoachingHistory: asArr(o.aiCoachingHistory),
+  } as ExtendedDailyLifeData;
+}
+
+function loadExtData(): ExtendedDailyLifeData {
+  try {
+    const raw = usGetItem(EXT_KEY);
+    if (raw) return normalizeExtData(JSON.parse(raw));
+  } catch {
+    /* fall through to defaults */
+  }
+  return emptyExtData();
 }
 
 function saveExtData(data: ExtendedDailyLifeData) {
@@ -126,13 +143,6 @@ function saveExtData(data: ExtendedDailyLifeData) {
 }
 
 // ─── Date & streak helpers ────────────────────────────────────────────────────
-const isoDay = (d: Date) => {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x.toISOString().split('T')[0];
-};
-const TODAY = isoDay(new Date());
-
 const timeToMinutes = (t: string): number => {
   const [h, m] = (t || '0:0').split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
@@ -146,34 +156,38 @@ const isHappeningNow = (startTime: string, endTime: string): boolean => {
   return end >= start ? now >= start && now < end : now >= start || now < end;
 };
 
+/** Block belongs to a calendar day (legacy undated → only today until stamped). */
+function blockForDay(b: DailyScheduleBlock, day: string, today: string): boolean {
+  if (b.date) return b.date === day;
+  return day === today;
+}
+
 /** Compute current + longest streak from a list of ISO completion dates. */
 function computeStreaks(dates: string[]): { current: number; longest: number } {
   if (!dates.length) return { current: 0, longest: 0 };
-  const set = new Set(dates);
+  const set = new Set(dates.map((d) => d.slice(0, 10)));
   const sorted = [...set].sort();
 
   let longest = 1;
   let run = 1;
   for (let i = 1; i < sorted.length; i++) {
-    const diff = Math.round(
-      (new Date(sorted[i]).getTime() - new Date(sorted[i - 1]).getTime()) / 86_400_000
-    );
+    const diff = daysBetween(sorted[i - 1], sorted[i]);
     if (diff === 1) run += 1;
     else if (diff > 1) run = 1;
     longest = Math.max(longest, run);
   }
 
   // Current streak counts back from today (allowing yesterday to keep it alive).
-  const cursor = new Date();
-  cursor.setHours(0, 0, 0, 0);
-  if (!set.has(isoDay(cursor))) {
-    cursor.setDate(cursor.getDate() - 1);
-    if (!set.has(isoDay(cursor))) return { current: 0, longest };
+  const today = localISODay();
+  let cursor = today;
+  if (!set.has(cursor)) {
+    cursor = shiftLocalDay(today, -1);
+    if (!set.has(cursor)) return { current: 0, longest };
   }
   let current = 0;
-  while (set.has(isoDay(cursor))) {
+  while (set.has(cursor)) {
     current += 1;
-    cursor.setDate(cursor.getDate() - 1);
+    cursor = shiftLocalDay(cursor, -1);
   }
   return { current, longest };
 }
@@ -237,7 +251,7 @@ function addMinutesToHHMM(start: string, minutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 // ─── Tab config ───────────────────────────────────────────────────────────────
-type TabId = 'schedule' | 'habits' | 'focus' | 'goals' | 'calendar' | 'mood' | 'journal' | 'stats' | 'review' | 'sync';
+type TabId = 'schedule' | 'habits' | 'focus' | 'goals' | 'calendar' | 'mood' | 'journal' | 'stats' | 'reports' | 'review' | 'sync';
 
 const TABS: { id: TabId; label: string; Icon: React.FC<{ className?: string }> }[] = [
   { id: 'schedule',  label: 'Schedule',  Icon: ListTodo },
@@ -248,6 +262,7 @@ const TABS: { id: TabId; label: string; Icon: React.FC<{ className?: string }> }
   { id: 'mood',      label: 'Mood',      Icon: Smile },
   { id: 'journal',   label: 'Journal',   Icon: BookOpen },
   { id: 'stats',     label: 'Stats',     Icon: BarChart2 },
+  { id: 'reports',   label: 'Reports',   Icon: FileBarChart2 },
   { id: 'review',    label: 'History',   Icon: ClipboardList },
   { id: 'sync',      label: 'Sync',      Icon: RefreshCw },
 ];
@@ -285,6 +300,21 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
   const mockClearedRef = useRef(false);
+  // Live local calendar day (never freeze at module load / never use UTC ISO)
+  const [today, setToday] = useState(() => localISODay());
+
+  useEffect(() => {
+    const tick = () => setToday(localISODay());
+    const id = window.setInterval(tick, 60_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
 
   // Set data with auto-sync
   const setData = useCallback((updater: React.SetStateAction<ExtendedDailyLifeData>) => {
@@ -300,102 +330,51 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
   // Persist selected planner tab
   useEffect(() => {
     try {
-      localStorage.setItem("sybeez_planner_tab", activeTab);
+      usSetItem("sybeez_planner_tab", activeTab);
     } catch {
       /* ignore */
     }
   }, [activeTab]);
 
-  // One-time: strip old mock template schedules (keep user-written custom tasks)
+  // One-time: stamp missing schedule dates (never delete user tasks by title/template)
   useEffect(() => {
     if (mockClearedRef.current) return;
     mockClearedRef.current = true;
+    const day = localISODay();
     setData((prev) => {
-      const cleaned = (prev.dailySchedule || []).filter((b) => !b.templateKey);
-      // Also drop known auto-generated mock titles if they somehow have no templateKey
-      const MOCK_TITLES = new Set(
-        [
-          "Wake Up & Hydrate",
-          "Morning Exercise",
-          "Fresh Up & Dress",
-          "Deep Work - Session 1",
-          "Deep Work - Session 2",
-          "Break & Recharge",
-          "Afternoon Work",
-          "Wind Down",
-          "Morning Run",
-          "Shower & Breakfast",
-          "Deep Work Block 1",
-          "Deep Work Block 2",
-          "Quick Break",
-          "Personal Projects",
-          "Dinner & Relax",
-          "Wake & Fuel",
-          "Intense Workout",
-          "Quick Refresh",
-          "Power Breakfast",
-          "Deep Work Sprint 1",
-          "Deep Work Sprint 2",
-          "Evening Hustle",
-          "Reflect & Relax",
-          "Wake & Hydrate",
-          "Light Workout",
-          "Breakfast & Shower",
-          "Study Session 1",
-          "Study Session 2",
-          "Study Session 3",
-          "Break & Snack",
-          "Personal Project",
-          "Cardio Session",
-          "Strength Training",
-          "Shower & Recovery",
-          "Protein Breakfast",
-          "Work Block 1",
-          "Healthy Lunch",
-          "Work Block 2",
-          "Evening Yoga",
-          "Meal Prep & Sleep",
-        ].map((t) => t.toLowerCase()),
-      );
-      let withoutMock = cleaned.filter(
-        (b) => !MOCK_TITLES.has(String(b.title || "").toLowerCase()) || b.description === "Custom task",
-      );
-      // Stamp completion date on already-done tasks so Review can group them
-      withoutMock = withoutMock.map((b) =>
-        b.isCompleted && !b.completedAt ? { ...b, completedAt: TODAY } : b,
-      );
-      const changed =
-        withoutMock.length !== (prev.dailySchedule || []).length ||
-        withoutMock.some((b, i) => b !== (prev.dailySchedule || [])[i]);
-      if (!changed) return prev;
-      return { ...prev, dailySchedule: withoutMock };
+      const next = (prev.dailySchedule || []).map((b) => {
+        const date = b.date || (b.completedAt ? b.completedAt.slice(0, 10) : day);
+        const completedAt = b.isCompleted && !b.completedAt ? day : b.completedAt;
+        if (date === b.date && completedAt === b.completedAt) return b;
+        return { ...b, date, completedAt };
+      });
+      if (next.every((b, i) => b === (prev.dailySchedule || [])[i])) return prev;
+      return { ...prev, dailySchedule: next };
     });
   }, [setData]);
 
-  // Load: prefer non-empty localStorage; hydrate from backend only if local empty
+  // Load: local first; authenticated hydrate/push via persistSync only
   useEffect(() => {
     const loadData = async () => {
       try {
         const localData = loadExtData();
-        if (hasPlannerContent(localData)) {
-          setDataState(localData);
-          setIsConnected(true);
-          void saveDataToBackend(localData);
-        } else {
-          const backendData = await loadDataFromBackend();
-          if (backendData) {
-            setDataState(backendData);
-            saveExtData(backendData);
-            setIsConnected(true);
-          } else {
-            setDataState(localData);
-            setIsConnected(false);
+        setDataState(localData);
+        const uid = currentUserId();
+        if (uid) {
+          const { hydrateFromBackend, pushPlanner } = await import("@/services/persistSync");
+          await hydrateFromBackend();
+          setDataState(loadExtData());
+          if (hasPlannerContent(loadExtData())) {
+            void pushPlanner();
           }
+          setIsConnected(true);
+        } else {
+          setIsConnected(false);
         }
       } catch (error) {
         console.error("Error loading planner data:", error);
         setDataState(loadExtData());
-        setIsConnected(false);
+        setIsConnected(!!currentUserId());
       } finally {
         setIsLoading(false);
       }
@@ -415,22 +394,25 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
     return () => window.removeEventListener("sybeez:data-changed", onDataChanged);
   }, []);
 
-  // Periodically push local → backend (never overwrite local from empty remote)
+  // Periodically push local → backend when signed in
   useEffect(() => {
+    if (!isConnected) return;
     const interval = setInterval(() => {
-      if (isConnected) {
-        void saveDataToBackend(loadExtData());
-      }
+      void import("@/services/persistSync").then(({ pushPlanner }) => {
+        void pushPlanner();
+      });
     }, 30000);
-
     return () => clearInterval(interval);
   }, [isConnected]);
 
-  const schedule = data.dailySchedule;
-  // No Quick Template selected → all schedules; selected → related only
-  const visibleSchedule = selectedTemplate
-    ? schedule.filter((b) => b.templateKey === selectedTemplate)
-    : schedule;
+  const schedule = data.dailySchedule || [];
+  // Today’s plan (+ optional Quick Template filter). Score never includes other days.
+  const visibleSchedule = useMemo(() => {
+    const dayBlocks = schedule.filter((b) => blockForDay(b, today, today));
+    return selectedTemplate
+      ? dayBlocks.filter((b) => b.templateKey === selectedTemplate)
+      : dayBlocks;
+  }, [schedule, selectedTemplate, today]);
   const completed = visibleSchedule.filter(b => b.isCompleted).length;
   const total = visibleSchedule.length;
   const productivityScore = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -438,15 +420,17 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
   // ── Today's stats (derived) ─────────────────────────────────────────────────
   const todayStats: DailyStats = useMemo(() => {
     const workSessions = (data.pomodoroHistory || []).filter(
-      s => s.type === 'work' && s.isCompleted && (s.completedAt || '').startsWith(TODAY)
+      s => s.type === 'work' && s.isCompleted && (s.completedAt || '').startsWith(today)
     );
-    const habitsDoneToday = (data.habits || []).filter(h => h.completedDates.includes(TODAY)).length;
-    const todayMoods = (data.moodHistory || []).filter(m => m.date === TODAY);
+    const habitsDoneToday = (data.habits || []).filter(
+      (h) => Array.isArray(h.completedDates) && h.completedDates.includes(today),
+    ).length;
+    const todayMoods = (data.moodHistory || []).filter(m => m.date === today);
     const moodScore = todayMoods.length
       ? Math.round(todayMoods.reduce((a, m) => a + m.mood, 0) / todayMoods.length)
       : undefined;
     return {
-      date: TODAY,
+      date: today,
       tasksCompleted: completed,
       totalTasks: total,
       productivityScore,
@@ -458,33 +442,32 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
       caloriesConsumed: 0,
       moodScore,
     };
-  }, [data.pomodoroHistory, data.habits, data.moodHistory, completed, total, productivityScore]);
+  }, [data.pomodoroHistory, data.habits, data.moodHistory, completed, total, productivityScore, today]);
 
   // Persist today's stats into analytics history (guarded to avoid render loops).
   useEffect(() => {
     setData(prev => {
-      const existing = prev.analytics.find(s => s.date === TODAY);
+      const analyticsList = Array.isArray(prev.analytics) ? prev.analytics : [];
+      const existing = analyticsList.find(s => s.date === today);
       if (existing && JSON.stringify(existing) === JSON.stringify(todayStats)) return prev;
-      const analytics = [...prev.analytics.filter(s => s.date !== TODAY), todayStats].sort(
+      const analytics = [...analyticsList.filter(s => s.date !== today), todayStats].sort(
         (a, b) => a.date.localeCompare(b.date)
       );
       return { ...prev, analytics };
     });
-  }, [todayStats, setData]);
+  }, [todayStats, setData, today]);
 
   // Merge persisted analytics with a fresh copy of today's stats for display.
   const analyticsForDisplay = useMemo(
-    () => [...data.analytics.filter(s => s.date !== TODAY), todayStats].sort((a, b) => a.date.localeCompare(b.date)),
-    [data.analytics, todayStats]
+    () => [...data.analytics.filter(s => s.date !== today), todayStats].sort((a, b) => a.date.localeCompare(b.date)),
+    [data.analytics, todayStats, today]
   );
 
   // ── Weekly analytics (derived) ──────────────────────────────────────────────
   const weeklyAnalytics: WeeklyAnalytics = useMemo(() => {
     const days: DailyStats[] = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = isoDay(d);
+      const key = shiftLocalDay(today, -i);
       days.push(
         analyticsForDisplay.find(s => s.date === key) || {
           date: key, tasksCompleted: 0, totalTasks: 0, productivityScore: 0, focusTime: 0,
@@ -515,7 +498,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
         .slice(0, 3),
       productivityTrend: trend,
     };
-  }, [analyticsForDisplay, data.habits]);
+  }, [analyticsForDisplay, data.habits, today]);
 
   // ── Schedule ────────────────────────────────────────────────────────────────
   // Quick Templates are filters only — they never inject mock schedules.
@@ -556,37 +539,46 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
 
   const toggleTask = (id: string) =>
     setData((prev) => {
-      const block = prev.dailySchedule.find((b) => b.id === id);
+      const schedule = prev.dailySchedule || [];
+      const block = schedule.find((b) => b.id === id);
       if (!block) return prev;
       const nextDone = !block.isCompleted;
-      let goals = prev.goals;
-      if (block.goalId && nextDone) {
-        goals = prev.goals.map((g) => {
+      let goals = prev.goals || [];
+      if (block.goalId) {
+        goals = goals.map((g) => {
           if (g.id !== block.goalId) return g;
-          return appendProgressLog(g, {
-            delta: 1,
-            note: `Schedule: ${block.title}`,
-            source: "schedule",
-            scheduleBlockId: block.id,
-          });
+          if (nextDone) {
+            return appendProgressLog(g, {
+              delta: 1,
+              note: `Schedule: ${block.title}`,
+              source: "schedule",
+              scheduleBlockId: block.id,
+              date: today,
+            });
+          }
+          return removeScheduleProgressLog(g, block.id);
         });
       }
       return {
         ...prev,
         goals,
-        dailySchedule: prev.dailySchedule.map((b) => {
+        dailySchedule: schedule.map((b) => {
           if (b.id !== id) return b;
           return {
             ...b,
             isCompleted: nextDone,
-            completedAt: nextDone ? TODAY : undefined,
+            completedAt: nextDone ? today : undefined,
+            date: b.date || today,
           };
         }),
       };
     });
 
   const deleteTask = (id: string) =>
-    setData(prev => ({ ...prev, dailySchedule: prev.dailySchedule.filter(b => b.id !== id) }));
+    setData((prev) => ({
+      ...prev,
+      dailySchedule: (prev.dailySchedule || []).filter((b) => b.id !== id),
+    }));
 
   const addTask = () => {
     if (!newTaskTitle.trim()) {
@@ -598,7 +590,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
     setData((prev) => ({
       ...prev,
       dailySchedule: [
-        ...prev.dailySchedule,
+        ...(prev.dailySchedule || []),
         {
           id: Date.now().toString(),
           title: newTaskTitle.trim(),
@@ -608,6 +600,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
           description: "Custom task",
           isCompleted: false,
           canSkip: true,
+          date: today,
           ...(selectedTemplate ? { templateKey: selectedTemplate } : {}),
         },
       ],
@@ -634,8 +627,10 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
       ...prev,
       habits: prev.habits.map(h => {
         if (h.id !== habitId) return h;
-        const already = h.completedDates.includes(date);
-        const completedDates = already ? h.completedDates.filter(d => d !== date) : [...h.completedDates, date];
+        const already = Array.isArray(h.completedDates) && h.completedDates.includes(date);
+        const completedDates = already
+          ? h.completedDates.filter((d) => d !== date)
+          : [...(Array.isArray(h.completedDates) ? h.completedDates : []), date];
         const { current, longest } = computeStreaks(completedDates);
         return {
           ...h,
@@ -694,7 +689,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
           isCompleted: false,
           canSkip: true,
           goalId: goal.id,
-          date: TODAY,
+          date: today,
         },
       ],
     }));
@@ -891,17 +886,32 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
           </Card>
         </div>
       ) : (
-        <div className="rounded-xl border border-dashed border-border/60 px-4 py-8 text-center">
+        <div className="rounded-xl border border-dashed border-border/60 px-4 py-8 text-center space-y-3">
+          <ListTodo className="h-8 w-8 text-muted-foreground mx-auto" />
           <p className="text-sm text-muted-foreground">
             {selectedTemplate
-              ? `No ${TEMPLATE_META[selectedTemplate]?.name || ""} tasks yet — add one below.`
-              : "No schedules yet — pick a suggestion or write your own below."}
+              ? `No ${TEMPLATE_META[selectedTemplate]?.name || ""} tasks for today — add one below.`
+              : "No plan for today yet — pick a suggestion or write your own below."}
           </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mx-auto"
+            onClick={() => {
+              const el = document.getElementById("planner-add-task");
+              el?.scrollIntoView({ behavior: "smooth", block: "center" });
+              (el as HTMLInputElement | null)?.focus();
+            }}
+          >
+            <Plus className="h-3.5 w-3.5 mr-1.5" />
+            Add today’s first task
+          </Button>
         </div>
       )}
 
       {/* Add schedule — suggestions + easy time */}
-      <Card className="border border-border bg-black">
+      <Card className="border border-border bg-black" id="planner-add-card">
         <CardContent className="p-4">
           <div className="space-y-3">
             <div>
@@ -932,6 +942,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
 
             <div className="flex gap-2 items-center">
               <Input
+                id="planner-add-task"
                 placeholder="Or type a custom schedule…"
                 value={newTaskTitle}
                 onChange={(e) => setNewTaskTitle(e.target.value)}
@@ -1035,7 +1046,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `planner-backup-${TODAY}.json`;
+    a.download = `planner-backup-${today}.json`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success('Backup exported');
@@ -1090,7 +1101,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
               isConnected ? "bg-green-500/15 text-green-500" : "bg-muted/30 text-muted-foreground"
             )}>
               <Check className="h-3 w-3" />
-              {isConnected ? 'Backend synced' : 'Local only'}
+              {isConnected ? 'Synced (signed in)' : 'Local only'}
             </span>
           </div>
           <div className="grid grid-cols-3 gap-2">
@@ -1122,7 +1133,7 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
           <span className="text-sm font-medium text-foreground">Privacy</span>
         </div>
         <p className="text-xs text-muted-foreground">
-          Your planner data lives on this device{isConnected ? ' and syncs to your backend' : ''}.
+          Your planner data lives on this device{isConnected ? ' and syncs to your account when signed in' : ' — sign in to sync across devices'}.
           Export a backup regularly so you never lose your progress.
         </p>
       </div>
@@ -1178,6 +1189,15 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
       case 'mood':      return <MoodTracker moods={data.moodHistory} onAddMood={addMood} onUpdateMood={updateMood} />;
       case 'journal':   return <DailyJournal entries={data.journal} onAddEntry={addJournalEntry} onUpdateEntry={updateJournalEntry} onDeleteEntry={deleteJournalEntry} />;
       case 'stats':     return <ProductivityAnalytics dailyStats={analyticsForDisplay} weeklyAnalytics={weeklyAnalytics} />;
+      case 'reports':   return (
+        <PlannerReports
+          schedule={data.dailySchedule || []}
+          habits={data.habits || []}
+          goals={data.goals || []}
+          dailyStats={analyticsForDisplay}
+          weeklyAnalytics={weeklyAnalytics}
+        />
+      );
       case 'review':    return (
         <WeeklyReview
           dailyStats={analyticsForDisplay}
@@ -1244,7 +1264,14 @@ const DailyLifePlannerEnhanced: React.FC<DailyLifePlannerProps> = ({
       <div className="flex-1 overflow-hidden">
         <ScrollArea className="h-full">
           <div className="px-6 py-4 max-w-4xl">
-            {renderContent()}
+            {isLoading ? (
+              <div className="flex items-center justify-center py-16 text-sm text-muted-foreground gap-2">
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Loading planner…
+              </div>
+            ) : (
+              renderContent()
+            )}
           </div>
         </ScrollArea>
       </div>

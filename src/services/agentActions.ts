@@ -54,7 +54,26 @@ export type AgentAction = {
   gratitude?: Record<string, unknown>;
   memory?: Record<string, unknown>;
   thought?: Record<string, unknown>;
+  item?: Record<string, unknown>;
+  deleted?: boolean;
+  /** Investment analytics chart payload (UI-only) */
+  portfolio_series?: Array<{ date: string; value: number }>;
+  holdings?: unknown[];
+  summary?: Record<string, unknown>;
+  projections?: Record<string, unknown>;
+  empty?: boolean;
+  /** In-app navigation */
+  path?: string;
+  view?: string;
+  tab?: string;
+  label?: string;
+  reason?: string;
+  /** Suggested follow-up prompts */
+  suggestions?: string[];
 };
+
+/** Fired when the agent asks the UI to change page/tab. */
+export const NAVIGATE_EVENT = "sybeez:navigate";
 
 function notifyChanged(detail: { domains: string[] }) {
   window.dispatchEvent(new CustomEvent(DATA_CHANGED_EVENT, { detail }));
@@ -119,6 +138,32 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
 
   for (const action of actions) {
     if (!action || action.ok === false) continue;
+
+    // UI-only investment charts — rendered by AssistantPanel, no persistence
+    if (action.type === "show_investment_analytics") {
+      continue;
+    }
+    if (action.type === "suggest_followups") {
+      continue;
+    }
+    if (action.type === "navigate" && (action.path || action.tab)) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent(NAVIGATE_EVENT, {
+            detail: {
+              path: action.path,
+              view: action.view || "finance",
+              tab: action.tab,
+              label: action.label,
+            },
+          }),
+        );
+        applied.push(`Open ${action.label || action.tab || action.path}`);
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
 
     // ── Finance create ─────────────────────────────────────────────
     if ((action.type === "add_expense" || action.type === "add_income") && action.transaction) {
@@ -217,7 +262,12 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
     // ── Planner create tasks ───────────────────────────────────────
     if (action.type === "add_plan_tasks" && Array.isArray(action.tasks) && action.tasks.length) {
       const schedule = Array.isArray(ext.dailySchedule) ? [...(ext.dailySchedule as unknown[])] : [];
-      for (const task of action.tasks) schedule.push(task);
+      const d = new Date();
+      const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      for (const task of action.tasks) {
+        const t = task as Record<string, unknown>;
+        schedule.push({ ...t, date: (t.date as string) || today });
+      }
       ext = { ...ext, dailySchedule: schedule };
       extDirty = true;
       domains.add("planner");
@@ -395,29 +445,109 @@ export function applyAgentActions(actions: AgentAction[] | undefined | null): st
       continue;
     }
 
-    // ── Life Diary writes ──────────────────────────────────────────
+    // ── Life Diary writes / edits ──────────────────────────────────
+    if (action.type === "diary_open_tab" && action.tab) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("sybeez:diary-open-tab", {
+            detail: { tab: action.tab },
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
+
     if (
       action.type === "add_diary_entry" ||
       action.type === "add_gratitude" ||
       action.type === "add_memory" ||
-      action.type === "add_thought"
+      action.type === "add_thought" ||
+      action.type === "update_diary_entry" ||
+      action.type === "update_gratitude" ||
+      action.type === "update_memory" ||
+      action.type === "update_thought" ||
+      action.type === "delete_diary_entry" ||
+      action.type === "delete_gratitude" ||
+      action.type === "delete_memory" ||
+      action.type === "delete_thought"
     ) {
       const diary = loadDiary();
       if (action.type === "add_diary_entry" && action.entry) {
         diary.entries = [action.entry as Record<string, unknown>, ...(diary.entries || [])];
         applied.push(`Diary: ${String((action.entry as { title?: string }).title || "Entry")}`);
+      } else if (action.type === "update_diary_entry" && action.entry) {
+        const id = String((action.entry as { id?: string }).id || action.id || "");
+        diary.entries = (diary.entries || []).map((e) =>
+          String((e as { id?: string }).id) === id ? (action.entry as Record<string, unknown>) : e,
+        );
+        applied.push("Diary entry updated");
+      } else if (action.type === "delete_diary_entry" && (action.id || action.item)) {
+        const id = String(action.id || (action.item as { id?: string })?.id || "");
+        diary.entries = (diary.entries || []).filter(
+          (e) => String((e as { id?: string }).id) !== id,
+        );
+        applied.push("Diary entry deleted");
       } else if (action.type === "add_gratitude" && action.gratitude) {
         diary.gratitude = [
           action.gratitude as Record<string, unknown>,
           ...(diary.gratitude || []),
         ];
         applied.push("Gratitude saved");
+      } else if (action.type === "update_gratitude" && action.gratitude) {
+        const id = String((action.gratitude as { id?: string }).id || action.id || "");
+        diary.gratitude = (diary.gratitude || []).map((g) =>
+          String((g as { id?: string }).id) === id
+            ? (action.gratitude as Record<string, unknown>)
+            : g,
+        );
+        applied.push("Gratitude updated");
+      } else if (action.type === "delete_gratitude" && (action.id || action.item)) {
+        const id = String(action.id || (action.item as { id?: string })?.id || "");
+        diary.gratitude = (diary.gratitude || []).filter(
+          (g) => String((g as { id?: string }).id) !== id,
+        );
+        applied.push("Gratitude deleted");
       } else if (action.type === "add_memory" && action.memory) {
         diary.memories = [action.memory as Record<string, unknown>, ...(diary.memories || [])];
-        applied.push(`Memory: ${String((action.memory as { title?: string }).title || "")}`);
+        const cat = String((action.memory as { category?: string }).category || "memory");
+        applied.push(
+          cat === "achievement" || cat === "milestone"
+            ? `Achievement: ${String((action.memory as { title?: string }).title || "")}`
+            : `Memory: ${String((action.memory as { title?: string }).title || "")}`,
+        );
+      } else if (action.type === "update_memory" && action.memory) {
+        const id = String((action.memory as { id?: string }).id || action.id || "");
+        diary.memories = (diary.memories || []).map((m) =>
+          String((m as { id?: string }).id) === id
+            ? (action.memory as Record<string, unknown>)
+            : m,
+        );
+        applied.push("Memory updated");
+      } else if (action.type === "delete_memory" && (action.id || action.item)) {
+        const id = String(action.id || (action.item as { id?: string })?.id || "");
+        diary.memories = (diary.memories || []).filter(
+          (m) => String((m as { id?: string }).id) !== id,
+        );
+        applied.push("Memory deleted");
       } else if (action.type === "add_thought" && action.thought) {
         diary.thoughts = [action.thought as Record<string, unknown>, ...(diary.thoughts || [])];
         applied.push("Thought saved");
+      } else if (action.type === "update_thought" && action.thought) {
+        const id = String((action.thought as { id?: string }).id || action.id || "");
+        diary.thoughts = (diary.thoughts || []).map((t) =>
+          String((t as { id?: string }).id) === id
+            ? (action.thought as Record<string, unknown>)
+            : t,
+        );
+        applied.push("Thought updated");
+      } else if (action.type === "delete_thought" && (action.id || action.item)) {
+        const id = String(action.id || (action.item as { id?: string })?.id || "");
+        diary.thoughts = (diary.thoughts || []).filter(
+          (t) => String((t as { id?: string }).id) !== id,
+        );
+        applied.push("Thought deleted");
       } else {
         continue;
       }

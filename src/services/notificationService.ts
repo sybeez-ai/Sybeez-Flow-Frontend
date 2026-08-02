@@ -1,5 +1,5 @@
 import { LifeManagementService } from "@/services/lifeManagement";
-import { usGetItem, usSetItem } from "@/services/userStorage";
+import { usGetItem, usSetItem, currentUserId } from "@/services/userStorage";
 
 export type NotificationModule = "finance" | "planner" | "gmail" | "diary" | "focus" | "system";
 export type NotificationTarget =
@@ -34,8 +34,13 @@ export interface NotificationPrefs {
 }
 
 const STORE_KEY = "sybeez_notifications";
-const TOASTED_KEY = "sybeez_notifications_toasted";
+const TOASTED_KEY_BASE = "sybeez_notifications_toasted";
 export const NOTIFICATIONS_CHANGED = "sybeez:notifications-changed";
+
+function toastedStorageKey(): string {
+  const uid = currentUserId() || "anon";
+  return `${TOASTED_KEY_BASE}:${uid}`;
+}
 
 const DEFAULT_PREFS: NotificationPrefs = {
   inApp: true,
@@ -107,7 +112,7 @@ function saveNotifications(items: AppNotification[]) {
 
 function getToastedKeys(): Set<string> {
   try {
-    const raw = sessionStorage.getItem(TOASTED_KEY);
+    const raw = sessionStorage.getItem(toastedStorageKey());
     if (!raw) return new Set();
     return new Set(JSON.parse(raw) as string[]);
   } catch {
@@ -118,7 +123,17 @@ function getToastedKeys(): Set<string> {
 function markToasted(sourceKey: string) {
   const keys = getToastedKeys();
   keys.add(sourceKey);
-  sessionStorage.setItem(TOASTED_KEY, JSON.stringify([...keys].slice(-200)));
+  sessionStorage.setItem(toastedStorageKey(), JSON.stringify([...keys].slice(-200)));
+}
+
+/** Clear toast-dedupe set for the current account (call on user switch). */
+export function clearToastedNotificationKeys() {
+  try {
+    sessionStorage.removeItem(toastedStorageKey());
+    sessionStorage.removeItem(TOASTED_KEY_BASE); // legacy global
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function ensureBrowserPermission(): Promise<NotificationPermission | "unsupported"> {

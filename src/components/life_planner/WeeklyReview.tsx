@@ -11,11 +11,8 @@ import {
   Brain,
   Clock,
   CheckCircle2,
-  RefreshCw,
   Sparkles,
   Trophy,
-  Lightbulb,
-  ArrowRight,
   Download,
   ListTodo,
   History,
@@ -33,8 +30,6 @@ import {
   MoodEntry,
   DailyScheduleBlock,
 } from "@/types/dailyLife";
-import { productivityAI } from "@/services/productivityAIService";
-import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface WeeklyReviewProps {
@@ -45,15 +40,6 @@ interface WeeklyReviewProps {
   journalEntries: JournalEntry[];
   moods: MoodEntry[];
   schedule: DailyScheduleBlock[];
-}
-
-interface AIReviewResponse {
-  summary: string;
-  highlights: string[];
-  improvements: string[];
-  recommendations: string[];
-  weeklyGrade: string;
-  focusAreas: string[];
 }
 
 type HistoryRange = "7" | "14" | "30" | "week" | "lastWeek";
@@ -81,17 +67,14 @@ function formatDayLabel(iso: string, today: string, yesterday: string): string {
 
 const WeeklyReview = ({
   dailyStats,
-  weeklyAnalytics,
+  weeklyAnalytics: _weeklyAnalytics,
   habits,
   goals: _goals,
   journalEntries: _journalEntries,
   moods: _moods,
   schedule,
 }: WeeklyReviewProps) => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [aiReview, setAiReview] = useState<AIReviewResponse | null>(null);
   const [historyRange, setHistoryRange] = useState<HistoryRange>("14");
-  const [aiText, setAiText] = useState("");
   const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
 
   const today = isoDay();
@@ -225,192 +208,54 @@ const WeeklyReview = ({
     return map;
   }, [habits, dateRange.start, dateRange.end]);
 
-  const generateAIReview = async () => {
-    setIsLoading(true);
-    setAiText("");
-    try {
-      const fmt = (blocks: DailyScheduleBlock[]) =>
-        blocks.length
-          ? blocks.map((b) => `• ${b.title} (${b.startTime}–${b.endTime})`).join("\n")
-          : "• (none yet)";
-      const todayText = fmt(doneBlocks.today);
-      const yesterdayText = fmt(doneBlocks.yesterday);
-      const weekText = fmt(doneBlocks.week);
+  /** Send weekly review to Productivity Coach chat only (not rendered on this page). */
+  const askCoachForWeeklyReview = () => {
+    const fmt = (blocks: DailyScheduleBlock[]) =>
+      blocks.length
+        ? blocks.map((b) => `${b.title} (${b.startTime}–${b.endTime})`).join(", ")
+        : "none";
+    const displayPrompt = "Generate my weekly review";
+    const prompt =
+      `Generate my weekly review for **${weekRange.label}** (${weekRange.start} → ${weekRange.end}).\n\n` +
+      `Facts (use only these):\n` +
+      `- Avg score: **${avgProductivity}%**\n` +
+      `- Focus: **${Math.round(totalFocusTime / 60)}h ${totalFocusTime % 60}m**, pomodoros ${totalPomodoros}\n` +
+      `- Tasks in stats: ${completedTasks}/${totalTasks}\n` +
+      `- Schedules completed this week (${doneBlocks.week.length}): ${fmt(doneBlocks.week)}\n` +
+      `- Completed today (${doneBlocks.today.length}): ${fmt(doneBlocks.today)}\n` +
+      `- Completed yesterday (${doneBlocks.yesterday.length}): ${fmt(doneBlocks.yesterday)}\n` +
+      `- Top habits: ${
+        topHabits.length
+          ? topHabits.map((h) => `${h.name} (${h.weekCompletions}/7)`).join(", ")
+          : "none"
+      }\n\n` +
+      `Write a complete review now (finish every section — do not stop mid-sentence). Use ## headings: Summary, Grade, Highlights, Improvements, Recommendations, Focus. ` +
+      `Keep each section short (2–4 bullets). Be honest — do not invent completed work. Bold key numbers; end with a short mindmap.`;
 
-      const analyticsData: WeeklyAnalytics = weeklyAnalytics || {
-        weekStart: weekRange.start,
-        weekEnd: weekRange.end,
-        dailyStats: weekStats,
-        avgProductivityScore: avgProductivity,
-        totalFocusTime,
-        totalPomodorosCompleted: totalPomodoros,
-        habitCompletionRate:
-          habits.length > 0 && totalTasks > 0
-            ? (completedTasks / totalTasks) * 100
-            : 0,
-        topHabits: topHabits.map((h) => ({
-          habitId: h.id,
-          completionRate: (h.weekCompletions / 7) * 100,
-        })),
-        productivityTrend:
-          avgProductivity >= 70
-            ? "improving"
-            : avgProductivity >= 40
-              ? "stable"
-              : "declining",
-      };
-
-      const response = await productivityAI.getWeeklyReview(analyticsData, {
-        todayDone: todayText,
-        yesterdayDone: yesterdayText,
-        weekDone: weekText,
-        completedCount: doneBlocks.week.length,
-        todayCount: doneBlocks.today.length,
-        yesterdayCount: doneBlocks.yesterday.length,
-      });
-
-      const responseText = response.message || "";
-      setAiText(responseText);
-
-      const review: AIReviewResponse = {
-        summary:
-          extractSection(responseText, "summary") ||
-          (doneBlocks.week.length
-            ? `You completed ${doneBlocks.week.length} schedule item(s) this week (${doneBlocks.today.length} today).`
-            : "No completed schedules yet this week — mark tasks done on Schedule to build your review."),
-        highlights:
-          extractList(responseText, "highlights") ||
-          extractList(responseText, "wins") ||
-          (doneBlocks.today.length
-            ? doneBlocks.today.slice(0, 3).map((b) => `Done today: ${b.title}`)
-            : doneBlocks.week.length
-              ? doneBlocks.week.slice(0, 3).map((b) => `Completed: ${b.title}`)
-              : ["Start by completing a schedule item today"]),
-        improvements:
-          extractList(responseText, "improvements") ||
-          extractList(responseText, "improve") ||
-          [
-            doneBlocks.yesterday.length === 0
-              ? "No completions logged yesterday"
-              : "Keep yesterday’s momentum",
-            totalFocusTime < 60 ? "Add more focused work time" : "Solid focus habit forming",
-          ],
-        recommendations:
-          extractList(responseText, "recommendations") ||
-          extractList(responseText, "goals") ||
-          [
-            "Mark schedules done as you finish them",
-            "Pick 3 priorities each morning",
-            "Review this page at the end of the week",
-          ],
-        weeklyGrade:
-          extractGrade(responseText) ||
-          (avgProductivity >= 80
-            ? "A"
-            : avgProductivity >= 60
-              ? "B"
-              : avgProductivity >= 40
-                ? "C"
-                : doneBlocks.week.length > 0
-                  ? "B"
-                  : "—"),
-        focusAreas:
-          extractList(responseText, "focus") || ["Schedule completion", "Consistency"],
-      };
-
-      setAiReview(review);
-      window.dispatchEvent(
-        new CustomEvent("sybeez-planner-review", {
-          detail: { text: responseText || formatReviewAsChat(review), week: weekRange.label },
-        }),
-      );
-      toast.success("Weekly review ready");
-    } catch (error) {
-      console.error("AI Review error:", error);
-      const fallback: AIReviewResponse = {
-        summary: doneBlocks.week.length
-          ? `This week you finished ${doneBlocks.week.length} schedule item(s). Today: ${doneBlocks.today.length}. Yesterday: ${doneBlocks.yesterday.length}.`
-          : "No completed schedules yet. Complete tasks on the Schedule tab, then generate again.",
-        highlights: doneBlocks.week.slice(0, 5).map((b) => b.title).length
-          ? doneBlocks.week.slice(0, 5).map((b) => b.title)
-          : ["No completed schedules yet"],
-        improvements: [
-          doneBlocks.today.length === 0 ? "Complete at least one task today" : "Nice progress today",
-          "Log completions so reviews stay accurate",
-        ],
-        recommendations: [
-          "Use Schedule suggestions to plan the day",
-          "Mark items done when finished",
-          "Ask the Productivity Coach: Generate my weekly review",
-        ],
-        weeklyGrade: doneBlocks.week.length >= 5 ? "B" : doneBlocks.week.length > 0 ? "C" : "—",
-        focusAreas: ["Consistency"],
-      };
-      setAiReview(fallback);
-      setAiText(formatReviewAsChat(fallback));
-      window.dispatchEvent(
-        new CustomEvent("sybeez-planner-review", {
-          detail: { text: formatReviewAsChat(fallback), week: weekRange.label },
-        }),
-      );
-    }
-    setIsLoading(false);
+    window.dispatchEvent(
+      new CustomEvent("sybeez:coach-ask", {
+        detail: {
+          sessionId: "productivity-coach",
+          prompt,
+          displayPrompt,
+          contextExtra: {
+            weeklyReviewAsk: {
+              label: weekRange.label,
+              start: weekRange.start,
+              end: weekRange.end,
+              avgProductivity,
+              focusMinutes: totalFocusTime,
+              pomodoros: totalPomodoros,
+              completedWeek: doneBlocks.week.slice(0, 12).map((b) => b.title),
+              completedToday: doneBlocks.today.slice(0, 8).map((b) => b.title),
+              completedYesterday: doneBlocks.yesterday.slice(0, 8).map((b) => b.title),
+            },
+          },
+        },
+      }),
+    );
+    toast.success("Asking Productivity Coach…", { position: "top-center", duration: 1800 });
   };
-
-  const extractSection = (text: string, section: string): string | null => {
-    const regex = new RegExp(`${section}[:\\s]*([^\\n]+)`, "i");
-    const match = text.match(regex);
-    return match ? match[1].trim() : null;
-  };
-
-  const extractList = (text: string, section: string): string[] | null => {
-    const lines = text.split("\n");
-    const result: string[] = [];
-    let capturing = false;
-    for (const line of lines) {
-      if (line.toLowerCase().includes(section)) {
-        capturing = true;
-        continue;
-      }
-      if (capturing && /^\s*[-•*]/.test(line)) {
-        result.push(line.replace(/^\s*[-•*]\s*/, "").trim());
-      } else if (capturing && result.length > 0 && line.trim() && !/^\s*[-•*]/.test(line)) {
-        if (/^[A-Za-z0-9].*:/.test(line.trim())) break;
-      }
-    }
-    return result.length > 0 ? result : null;
-  };
-
-  const extractGrade = (text: string): string | null => {
-    const match = text.match(/grade[:\s]*([A-F][+-]?)/i);
-    return match ? match[1] : null;
-  };
-
-  const getGradeColor = (grade: string) => {
-    if (grade.startsWith("A")) return "text-green-500 bg-green-500/10 border-green-500/30";
-    if (grade.startsWith("B")) return "text-blue-500 bg-blue-500/10 border-blue-500/30";
-    if (grade.startsWith("C")) return "text-yellow-500 bg-yellow-500/10 border-yellow-500/30";
-    if (grade === "—") return "text-muted-foreground bg-muted/20 border-border";
-    return "text-red-500 bg-red-500/10 border-red-500/30";
-  };
-
-  const formatReviewAsChat = (r: AIReviewResponse) =>
-    [
-      `**Weekly review** (${weekRange.label})`,
-      "",
-      `**Grade:** ${r.weeklyGrade}`,
-      "",
-      r.summary,
-      "",
-      "**Highlights**",
-      ...r.highlights.map((h) => `- ✅ ${h}`),
-      "",
-      "**Areas to improve**",
-      ...r.improvements.map((i) => `- 📈 ${i}`),
-      "",
-      "**Recommendations**",
-      ...r.recommendations.map((x) => `- 💡 ${x}`),
-    ].join("\n");
 
   const exportReport = () => {
     const lines = [
@@ -426,9 +271,6 @@ const WeeklyReview = ({
         "",
       ]),
     ];
-    if (aiReview) {
-      lines.push("AI REVIEW", `GRADE: ${aiReview.weeklyGrade}`, "", aiReview.summary);
-    }
     const blob = new Blob([lines.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -632,102 +474,36 @@ const WeeklyReview = ({
       )}
 
       <div className="border border-border rounded-lg overflow-hidden">
-        <div className="p-3 bg-muted/30 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-purple-500" />
-            <span className="font-medium text-sm">AI Weekly Review</span>
+        <div className="p-3 bg-muted/30 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <Brain className="h-4 w-4 text-purple-500 shrink-0" />
+            <div className="min-w-0">
+              <span className="font-medium text-sm">AI Weekly Review</span>
+              <p className="text-[11px] text-muted-foreground truncate">
+                Opens in Productivity Coach chat — answer shows there only
+              </p>
+            </div>
           </div>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void generateAIReview()}
-            disabled={isLoading}
+            onClick={askCoachForWeeklyReview}
+            className="gap-1.5 shrink-0"
           >
-            {isLoading ? (
-              <>
-                <RefreshCw className="h-3 w-3 mr-2 animate-spin" />
-                Analyzing…
-              </>
-            ) : (
-              <>
-                <Sparkles className="h-3 w-3 mr-2" />
-                {aiReview ? "Refresh" : "Generate Review"}
-              </>
-            )}
+            <Sparkles className="h-3 w-3" />
+            Ask coach
           </Button>
         </div>
-
-        {aiReview ? (
-          <div className="p-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Weekly Grade</span>
-              <div
-                className={cn(
-                  "text-2xl font-bold px-3 py-1 rounded-lg border",
-                  getGradeColor(aiReview.weeklyGrade),
-                )}
-              >
-                {aiReview.weeklyGrade}
-              </div>
-            </div>
-            <p className="text-sm whitespace-pre-wrap">{aiReview.summary}</p>
-            {aiText && (
-              <div className="rounded-lg border border-border/60 bg-muted/10 p-3 text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
-                {aiText}
-              </div>
-            )}
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Trophy className="h-4 w-4 text-yellow-500" />
-                <span className="text-xs font-medium text-muted-foreground">Highlights</span>
-              </div>
-              <ul className="space-y-1">
-                {aiReview.highlights.map((h, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
-                    {h}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <TrendingUp className="h-4 w-4 text-blue-500" />
-                <span className="text-xs font-medium text-muted-foreground">Areas to Improve</span>
-              </div>
-              <ul className="space-y-1">
-                {aiReview.improvements.map((imp, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm">
-                    <ArrowRight className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" />
-                    {imp}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Lightbulb className="h-4 w-4 text-yellow-500" />
-                <span className="text-xs font-medium text-muted-foreground">Recommendations</span>
-              </div>
-              <ul className="space-y-1">
-                {aiReview.recommendations.map((rec, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm">
-                    <Sparkles className="h-4 w-4 text-purple-500 shrink-0 mt-0.5" />
-                    {rec}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        ) : (
-          <div className="p-8 text-center text-muted-foreground">
-            <Brain className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">Generate a review from your completed history</p>
-            <p className="text-xs mt-1">
-              Or ask the Productivity Coach: “Generate my weekly review”
-            </p>
-          </div>
-        )}
+        <div className="p-5 text-center text-muted-foreground">
+          <Brain className="h-10 w-10 mx-auto mb-2 opacity-30" />
+          <p className="text-sm">
+            Tap <span className="text-foreground font-medium">Ask coach</span> to generate your
+            weekly review in chat.
+          </p>
+          <p className="text-xs mt-1">
+            History stats stay here; the AI write-up only appears in the coach panel.
+          </p>
+        </div>
       </div>
     </div>
   );

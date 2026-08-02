@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { CalendarEvent, DailyScheduleBlock } from "@/types/dailyLife";
 import { cn } from "@/lib/utils";
+import { localISODay } from "@/utils/dateUtils";
 
 interface ProductivityCalendarProps {
   events: CalendarEvent[];
@@ -92,17 +93,15 @@ const ProductivityCalendar = ({
 
   // Get events for a specific date
   const getEventsForDate = (date: Date): CalendarEvent[] => {
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = localISODay(date);
     return events.filter(e => e.date === dateStr);
   };
 
-  // Get schedule blocks for a specific date (if today)
+  // Schedule blocks for the given calendar day (by block.date)
   const getScheduleForDate = (date: Date): DailyScheduleBlock[] => {
-    const today = new Date();
-    if (date.toDateString() === today.toDateString()) {
-      return scheduleBlocks;
-    }
-    return [];
+    const dateStr = localISODay(date);
+    const today = localISODay();
+    return scheduleBlocks.filter((b) => (b.date || today) === dateStr);
   };
 
   // Check if date is today
@@ -158,7 +157,7 @@ const ProductivityCalendar = ({
       title: newEvent.title,
       startTime: newEvent.startTime,
       endTime: newEvent.endTime,
-      date: selectedDate.toISOString().split('T')[0],
+      date: localISODay(selectedDate),
       isAllDay: false,
       category: newEvent.category,
       isRecurring: false,

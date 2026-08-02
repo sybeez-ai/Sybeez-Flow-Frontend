@@ -1,5 +1,6 @@
-// API configuration
-const API_BASE = import.meta.env.VITE_API_URL || 'https://your-api.execute-api.us-east-1.amazonaws.com/dev';
+import { getApiBase } from "@/services/apiBase";
+
+const API_BASE = getApiBase();
 
 export interface JobStatus {
   jobId: string;

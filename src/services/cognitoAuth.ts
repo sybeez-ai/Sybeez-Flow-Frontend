@@ -2,13 +2,13 @@
  * AWS Cognito Hosted UI — Google login via authorization code + PKCE.
  */
 
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || "http://localhost:8000").replace(
-  /\/$/,
-  "",
-);
+import { getApiBase } from "@/services/apiBase";
+
+const BACKEND_URL = getApiBase();
 
 const PKCE_VERIFIER_KEY = "sybeez_cognito_pkce_verifier";
 const PKCE_STATE_KEY = "sybeez_cognito_oauth_state";
+const OAUTH_MODE_KEY = "sybeez_oauth_mode";
 
 export type CognitoAuthConfig = {
   cognito_enabled: boolean;
@@ -50,13 +50,16 @@ export async function fetchAuthConfig(): Promise<CognitoAuthConfig | null> {
 }
 
 /** Start Cognito Hosted UI Google login (redirects away). */
-export async function startCognitoGoogleLogin(): Promise<void> {
+export async function startCognitoGoogleLogin(
+  mode: "signin" | "signup" = "signin",
+): Promise<void> {
   const verifier = randomString(32);
   const state = randomString(16);
   const challenge = await sha256Challenge(verifier);
 
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
   sessionStorage.setItem(PKCE_STATE_KEY, state);
+  sessionStorage.setItem(OAUTH_MODE_KEY, mode);
 
   const res = await fetch(`${BACKEND_URL}/api/auth/cognito/start`, {
     method: "POST",
@@ -86,6 +89,7 @@ export async function completeCognitoCallback(params: {
 }): Promise<{
   access_token: string;
   expires_in: number;
+  is_new_user?: boolean;
   user: {
     id: string;
     email: string;
@@ -96,6 +100,8 @@ export async function completeCognitoCallback(params: {
 }> {
   const expectedState = sessionStorage.getItem(PKCE_STATE_KEY);
   const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
+  const modeRaw = sessionStorage.getItem(OAUTH_MODE_KEY) || "signin";
+  const mode = modeRaw === "signup" ? "signup" : "signin";
   if (!verifier) {
     throw new Error("Missing PKCE verifier — restart Google sign-in");
   }
@@ -110,11 +116,13 @@ export async function completeCognitoCallback(params: {
       code: params.code,
       code_verifier: verifier,
       state: params.state,
+      mode,
     }),
   });
   const data = await res.json().catch(() => ({}));
   sessionStorage.removeItem(PKCE_VERIFIER_KEY);
   sessionStorage.removeItem(PKCE_STATE_KEY);
+  sessionStorage.removeItem(OAUTH_MODE_KEY);
 
   if (!res.ok) {
     throw new Error(

@@ -185,7 +185,27 @@ export async function hydrateFromBackend(): Promise<void> {
   if (!hasMeaningfulPlanner(localPlanner)) {
     const remote = await getJSON<Record<string, unknown>>("/api/features/planner/data");
     if (hasMeaningfulPlanner(remote)) {
-      usSetJSON(EXT_KEY, remote);
+      // Always store a full shape — partial remote blobs used to crash Life Planner
+      // Spread remote first, then force array fields so bad remote shapes cannot win.
+      usSetJSON(EXT_KEY, {
+        gymSchedules: [],
+        hygieneRoutines: [],
+        mealPlans: [],
+        mentalHealthSchedules: [],
+        workBlocks: [],
+        preferences: {},
+        pomodoroSettings: {},
+        aiCoachingHistory: [],
+        ...remote,
+        dailySchedule: Array.isArray(remote.dailySchedule) ? remote.dailySchedule : [],
+        habits: Array.isArray(remote.habits) ? remote.habits : [],
+        goals: Array.isArray(remote.goals) ? remote.goals : [],
+        analytics: Array.isArray(remote.analytics) ? remote.analytics : [],
+        pomodoroHistory: Array.isArray(remote.pomodoroHistory) ? remote.pomodoroHistory : [],
+        calendarEvents: Array.isArray(remote.calendarEvents) ? remote.calendarEvents : [],
+        moodHistory: Array.isArray(remote.moodHistory) ? remote.moodHistory : [],
+        journal: Array.isArray(remote.journal) ? remote.journal : [],
+      });
       notifyDataChanged(["planner"]);
     }
   } else {

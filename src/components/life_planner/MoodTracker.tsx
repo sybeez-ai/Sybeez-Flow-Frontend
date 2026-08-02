@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MoodEntry } from "@/types/dailyLife";
 import { cn } from "@/lib/utils";
+import { localISODay, shiftLocalDay } from "@/utils/dateUtils";
 import { toast } from "sonner";
 
 interface MoodTrackerProps {
@@ -49,15 +50,11 @@ const MoodTracker = ({ moods, onAddMood, onUpdateMood }: MoodTrackerProps) => {
   const [selectedFactors, setSelectedFactors] = useState<string[]>([]);
   const [showFactors, setShowFactors] = useState(false);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localISODay();
   const todayMood = moods.find(m => m.date === today);
 
   // Get last 7 days moods
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - i));
-    return date.toISOString().split('T')[0];
-  });
+  const last7Days = Array.from({ length: 7 }, (_, i) => shiftLocalDay(today, -(6 - i)));
 
   const last7DaysMoods = last7Days.map(date => ({
     date,

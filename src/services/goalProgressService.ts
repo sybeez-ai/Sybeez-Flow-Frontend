@@ -97,6 +97,28 @@ export function appendProgressLog(
   return next;
 }
 
+/** Undo the latest schedule progress log for a block (when user unchecks a task). */
+export function removeScheduleProgressLog(goal: Goal, scheduleBlockId: string): Goal {
+  const logs = [...(goal.progressLogs || [])];
+  const idx = [...logs]
+    .reverse()
+    .findIndex(
+      (l) =>
+        l.scheduleBlockId === scheduleBlockId &&
+        (l.source === "schedule" || !l.source) &&
+        (Number(l.delta) || 0) > 0,
+    );
+  if (idx < 0) return goal;
+  const realIdx = logs.length - 1 - idx;
+  logs.splice(realIdx, 1);
+  const next: Goal = { ...goal, progressLogs: logs };
+  next.currentValue = recomputeCurrentValue(next);
+  if (next.currentValue < (Number(next.targetValue) || 0)) {
+    next.isCompleted = false;
+  }
+  return next;
+}
+
 export function toggleMilestoneSynced(
   goal: Goal,
   milestoneId: string,

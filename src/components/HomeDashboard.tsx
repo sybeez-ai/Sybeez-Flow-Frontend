@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { LifeManagementService } from "@/services/lifeManagement";
 import { netWorthService } from "@/services/netWorthService";
+import { computeFinanceRollup } from "@/services/financeRollup";
 import { currencyService } from "@/services/currencyService";
 import { appCurrencyCode, formatAppMoney } from "@/services/regionService";
 import { DATA_CHANGED_EVENT } from "@/services/persistSync";
@@ -20,6 +21,9 @@ import MotivationQuote from "@/components/MotivationQuote";
 interface HomeDashboardProps {
   onOpenFinance?: () => void;
   onOpenPlanner?: () => void;
+  onOpenDiary?: () => void;
+  onOpenGmail?: () => void;
+  onOpenDocuments?: () => void;
 }
 
 function greeting(): string {
@@ -29,7 +33,13 @@ function greeting(): string {
   return "Good evening";
 }
 
-const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => {
+const HomeDashboard = ({
+  onOpenFinance,
+  onOpenPlanner,
+  onOpenDiary,
+  onOpenGmail,
+  onOpenDocuments,
+}: HomeDashboardProps) => {
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -55,17 +65,18 @@ const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => 
     const currentMonth = new Date().toISOString().slice(0, 7);
     const currency = appCurrencyCode() || currencyService.getBaseCurrency() || "EUR";
 
-    // ── Finance: Net Worth ledger ──────────────────────────────────
-    let nwAssets = 0;
-    let nwLiabilities = 0;
-    let nwLiquid = 0;
+    // ── Unified Finance picture (Bills loans, savings, NW, people money…) ──
+    const rollup = computeFinanceRollup();
+    const totalAssets = rollup.totalAssets;
+    const totalLiabilities = rollup.totalLiabilities;
+    const netWorth = rollup.netWorth;
+    const liquidNetWorth =
+      rollup.buckets.netWorthLedgerAssets +
+      rollup.buckets.savings -
+      rollup.totalLiabilities;
     let topCategory: { key: string; value: number; pct: number; color?: string } | null = null;
     try {
-      const s = netWorthService.computeSummary();
-      nwAssets = s.totalAssets;
-      nwLiabilities = s.totalLiabilities;
-      nwLiquid = s.liquidNetWorth;
-      topCategory = s.byCategory[0] ?? null;
+      topCategory = netWorthService.computeSummary().byCategory[0] ?? null;
     } catch {
       /* ignore */
     }
@@ -83,35 +94,9 @@ const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => 
     }
     const monthBalance = monthIn - monthOut;
 
-    // ── Finance: Savings (FD, bank, emergency, goals) ──────────────
-    const savingsPlansTotal = (life.savingsPlans || []).reduce(
-      (s, p) => s + (p.currentAmount || 0),
-      0,
-    );
-    const savingsItems = life.savingsItems || [];
-    const savingsItemsTotal = savingsItems.reduce((s, p) => s + (p.principal || 0), 0);
-    const savingsTotal = savingsPlansTotal + savingsItemsTotal;
-    const liquidSavings = savingsItems
-      .filter((p) =>
-        ["bank_account", "savings_account", "emergency_fund"].includes(p.kind),
-      )
-      .reduce((s, p) => s + (p.principal || 0), 0);
-
-    // ── Finance: EMI remaining as liabilities ──────────────────────
-    const emiLiability = (life.emis || []).reduce(
-      (s, e) => s + (e.monthlyAmount || 0) * (e.remainingMonths || 0),
-      0,
-    );
-    const emiMonthly = (life.emis || []).reduce((s, e) => s + (e.monthlyAmount || 0), 0);
-    const unpaidBills = (life.bills || [])
-      .filter((b) => !b.isPaid)
-      .reduce((s, b) => s + (b.amount || 0), 0);
-
-    // Combined picture across Finance Manager modules
-    const totalAssets = nwAssets + savingsTotal;
-    const totalLiabilities = nwLiabilities + emiLiability;
-    const netWorth = totalAssets - totalLiabilities;
-    const liquidNetWorth = nwLiquid + liquidSavings;
+    const savingsTotal = rollup.buckets.savings;
+    const emiMonthly = rollup.buckets.emiMonthly;
+    const unpaidBills = rollup.buckets.unpaidBills;
 
     // ── Productivity — Life Planner ────────────────────────────────
     let tasksTotal = 0;
@@ -431,6 +416,34 @@ const HomeDashboard = ({ onOpenFinance, onOpenPlanner }: HomeDashboardProps) => 
                     </ul>
                   )}
                 </div>
+              </button>
+            </div>
+
+            {/* Other modules — same URL routing as the sidebar */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-7">
+              <button
+                type="button"
+                onClick={onOpenDiary}
+                className="group text-left glass-card rounded-2xl p-4 transition-all hover:bg-white/[0.06]"
+              >
+                <p className="text-[14px] font-semibold">Life Diary</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">/diary</p>
+              </button>
+              <button
+                type="button"
+                onClick={onOpenGmail}
+                className="group text-left glass-card rounded-2xl p-4 transition-all hover:bg-white/[0.06]"
+              >
+                <p className="text-[14px] font-semibold">Gmail Manager</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">/gmail</p>
+              </button>
+              <button
+                type="button"
+                onClick={onOpenDocuments}
+                className="group text-left glass-card rounded-2xl p-4 transition-all hover:bg-white/[0.06]"
+              >
+                <p className="text-[14px] font-semibold">Documents</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">/documents</p>
               </button>
             </div>
 

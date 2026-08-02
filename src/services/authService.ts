@@ -128,6 +128,23 @@ function writeAccounts(accounts: LocalAccount[]): void {
   localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
+/** Remove browser mirror of a deleted account so Sign-in cannot soft-recreate it. */
+export function removeLocalAccountMirror(opts: { email?: string; userId?: string }): void {
+  const email = (opts.email || "").trim().toLowerCase();
+  const userId = (opts.userId || "").trim();
+  if (!email && !userId) return;
+  try {
+    const next = readAccounts().filter((a) => {
+      if (email && a.email === email) return false;
+      if (userId && a.id === userId) return false;
+      return true;
+    });
+    writeAccounts(next);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getStoredToken(): string | null {
   try {
     return localStorage.getItem(AUTH_TOKEN_KEY);
@@ -419,57 +436,59 @@ export async function signInLocal(input: {
   if (!email) throw new Error("Enter your email");
   if (!password) throw new Error("Enter your password");
 
-  // Prefer server JWT login
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/auth/local/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return {
-        access_token: data.access_token,
-        expires_in: data.expires_in || 60 * 60 * 24 * 7,
-        user: data.user as AuthUser,
-      };
-    }
-  } catch {
-    /* fall through to migrate */
-  }
-
-  // Legacy browser-only account → migrate onto server, then JWT
-  const account = readAccounts().find((a) => a.email === email);
-  if (!account) {
-    throw new Error("No account found for this email. Create one first.");
-  }
-  const passwordHash = await hashPassword(password, account.salt);
-  if (passwordHash !== account.passwordHash) {
-    throw new Error("Incorrect email or password");
-  }
-
-  const migrateRes = await fetch(`${BACKEND_URL}/api/auth/local/migrate`, {
+  const res = await fetch(`${BACKEND_URL}/api/auth/local/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: account.name,
-      email: account.email,
-      password,
-    }),
+    body: JSON.stringify({ email, password }),
   });
-  const migrateData = await migrateRes.json().catch(() => ({}));
-  if (!migrateRes.ok) {
-    throw new Error(
-      typeof migrateData?.detail === "string"
-        ? migrateData.detail
-        : "Could not sign in. Try again.",
-    );
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    return {
+      access_token: data.access_token,
+      expires_in: data.expires_in || 60 * 60 * 24 * 7,
+      user: data.user as AuthUser,
+      is_new_user: false,
+    };
   }
-  return {
-    access_token: migrateData.access_token,
-    expires_in: migrateData.expires_in || 60 * 60 * 24 * 7,
-    user: migrateData.user as AuthUser,
-  };
+
+  const detail =
+    typeof data?.detail === "string"
+      ? data.detail
+      : "Could not sign in. Check your email and password.";
+
+  // Legacy mirror: only authenticate if the server already has the account —
+  // never create a new user from Sign in.
+  if (/no account/i.test(detail) || /sign up to create/i.test(detail)) {
+    removeLocalAccountMirror({ email });
+    throw new Error("No account found for this email. Sign up to create one.");
+  }
+
+  const account = readAccounts().find((a) => a.email === email);
+  if (account && res.status >= 500) {
+    const passwordHash = await hashPassword(password, account.salt);
+    if (passwordHash === account.passwordHash) {
+      const migrateRes = await fetch(`${BACKEND_URL}/api/auth/local/migrate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: account.name,
+          email: account.email,
+          password,
+        }),
+      });
+      const migrateData = await migrateRes.json().catch(() => ({}));
+      if (migrateRes.ok) {
+        return {
+          access_token: migrateData.access_token,
+          expires_in: migrateData.expires_in || 60 * 60 * 24 * 7,
+          user: migrateData.user as AuthUser,
+          is_new_user: false,
+        };
+      }
+    }
+  }
+
+  throw new Error(detail);
 }
 
 /** @deprecated Prefer signUpLocal / signInLocal */
@@ -491,11 +510,14 @@ export function createLocalSession(input: { name: string; email?: string }): Aut
   };
 }
 
-export async function exchangeGoogleCredential(credential: string): Promise<AuthSession> {
+export async function exchangeGoogleCredential(
+  credential: string,
+  mode: "signin" | "signup" = "signin",
+): Promise<AuthSession> {
   const res = await fetch(`${BACKEND_URL}/api/auth/google`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential }),
+    body: JSON.stringify({ credential, mode }),
   });
 
   const data = await res.json().catch(() => ({}));
@@ -506,7 +528,9 @@ export async function exchangeGoogleCredential(credential: string): Promise<Auth
         ? detail
         : Array.isArray(detail)
           ? detail.map((d: { msg?: string }) => d?.msg).filter(Boolean).join(", ")
-          : "Google sign-in failed";
+          : mode === "signup"
+            ? "Google sign-up failed"
+            : "Google sign-in failed";
     throw new Error(message || "Google sign-in failed");
   }
 
@@ -522,4 +546,20 @@ export async function fetchCurrentUser(token: string): Promise<AuthUser> {
     throw new Error(data?.detail || "Session invalid");
   }
   return data as AuthUser;
+}
+
+/** Permanently delete the signed-in account on the server. */
+export async function deleteAccountOnServer(token: string): Promise<{ email?: string }> {
+  const res = await fetch(`${BACKEND_URL}/api/auth/account`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = data?.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "Could not delete account. Please try again.",
+    );
+  }
+  return { email: typeof data?.email === "string" ? data.email : undefined };
 }

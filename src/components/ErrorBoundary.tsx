@@ -19,40 +19,50 @@ export default class ErrorBoundary extends Component<Props, State> {
     console.error("UI error boundary:", error, info.componentStack);
   }
 
+  private recover = () => {
+    this.setState({ error: null });
+  };
+
   render() {
     if (this.state.error) {
+      const detail =
+        import.meta.env.DEV || import.meta.env.MODE === "development"
+          ? this.state.error.message
+          : "";
       return (
-        <div
-          style={{
-            padding: "2rem",
-            maxWidth: 480,
-            margin: "4rem auto",
-            fontFamily: "system-ui, sans-serif",
-            color: "#1a1a1a",
-          }}
-        >
-          <h1 style={{ fontSize: "1.25rem", marginBottom: "0.5rem" }}>
-            {this.props.fallbackTitle || "Something went wrong"}
-          </h1>
-          <p style={{ opacity: 0.75, marginBottom: "1rem" }}>
-            Reload the page to continue. If this keeps happening, sign out and back in.
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              this.setState({ error: null });
-              window.location.reload();
-            }}
-            style={{
-              padding: "0.5rem 1rem",
-              borderRadius: 8,
-              border: "1px solid #ccc",
-              background: "#f5f5f5",
-              cursor: "pointer",
-            }}
-          >
-            Reload
-          </button>
+        <div className="flex h-full min-h-[240px] w-full items-center justify-center bg-background px-6 py-10 text-foreground">
+          <div className="max-w-md text-center">
+            <h1 className="text-lg font-semibold tracking-tight">
+              {this.props.fallbackTitle || "Something went wrong"}
+            </h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Try again below. If this keeps happening, reload the page or sign out and back in.
+            </p>
+            {detail ? (
+              <p className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs text-muted-foreground break-words">
+                {detail}
+              </p>
+            ) : null}
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={this.recover}
+                className="inline-flex items-center justify-center rounded-lg border border-border bg-background px-5 py-2.5 text-sm font-semibold text-foreground hover:bg-muted/50"
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  this.setState({ error: null });
+                  window.location.reload();
+                }}
+                className="inline-flex items-center justify-center rounded-lg bg-foreground px-5 py-2.5 text-sm font-semibold text-background"
+              >
+                Reload
+              </button>
+            </div>
+          </div>
         </div>
       );
     }

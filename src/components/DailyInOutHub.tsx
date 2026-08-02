@@ -4,7 +4,7 @@
  */
 
 import { usGetItem, usSetItem } from "@/services/userStorage";
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -17,6 +17,8 @@ import {
   FolderPlus,
   FolderOpen,
   Check,
+  Smile,
+  ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,89 @@ const FOLDERS_KEY = "sybeez_inout_month_folders";
 type ViewMode = "folders" | "inside";
 type AddKind = "income" | "expense" | null;
 type ListFilter = "all" | "6m" | "1y";
+
+type DescPreset = { label: string; icon: string; category: string };
+
+const INCOME_PRESETS: DescPreset[] = [
+  { label: "Salary", icon: "💼", category: "Salary" },
+  { label: "Freelance", icon: "🧑‍💻", category: "Freelance" },
+  { label: "Bonus", icon: "🎁", category: "Bonus" },
+  { label: "Commission", icon: "📊", category: "Commission" },
+  { label: "Business income", icon: "🏢", category: "Business" },
+  { label: "Client payment", icon: "🤝", category: "Clients" },
+  { label: "Refund", icon: "↩️", category: "Refund" },
+  { label: "Cashback", icon: "💳", category: "Cashback" },
+  { label: "Interest", icon: "🏦", category: "Interest" },
+  { label: "Dividend", icon: "📈", category: "Investments" },
+  { label: "Stock sale", icon: "📉", category: "Investments" },
+  { label: "Rental income", icon: "🏠", category: "Rental" },
+  { label: "Gift received", icon: "🎀", category: "Gifts" },
+  { label: "Family support", icon: "👨‍👩‍👧", category: "Family" },
+  { label: "Loan received", icon: "🤝", category: "Loans" },
+  { label: "Sold item", icon: "🏷️", category: "Sales" },
+  { label: "Side hustle", icon: "⚡", category: "Side income" },
+  { label: "Allowance", icon: "💵", category: "Allowance" },
+  { label: "Pension", icon: "👴", category: "Pension" },
+  { label: "Scholarship", icon: "🎓", category: "Education" },
+  { label: "Reimbursement", icon: "🧾", category: "Reimbursement" },
+  { label: "Other income", icon: "➕", category: "Other" },
+];
+
+const EXPENSE_PRESETS: DescPreset[] = [
+  { label: "Groceries", icon: "🛒", category: "Food" },
+  { label: "Restaurants / dining", icon: "🍽️", category: "Food" },
+  { label: "Coffee / snacks", icon: "☕", category: "Food" },
+  { label: "Rent", icon: "🏠", category: "Housing" },
+  { label: "Mortgage", icon: "🏡", category: "Housing" },
+  { label: "Utilities", icon: "💡", category: "Bills" },
+  { label: "Electricity", icon: "⚡", category: "Bills" },
+  { label: "Internet / Wi‑Fi", icon: "📶", category: "Bills" },
+  { label: "Mobile recharge", icon: "📱", category: "Bills" },
+  { label: "Water bill", icon: "💧", category: "Bills" },
+  { label: "Gas / fuel", icon: "⛽", category: "Transport" },
+  { label: "Public transport", icon: "🚌", category: "Transport" },
+  { label: "Taxi / Uber", icon: "🚕", category: "Transport" },
+  { label: "Parking", icon: "🅿️", category: "Transport" },
+  { label: "Car maintenance", icon: "🔧", category: "Transport" },
+  { label: "Shopping", icon: "🛍️", category: "Shopping" },
+  { label: "Clothes", icon: "👕", category: "Shopping" },
+  { label: "Electronics", icon: "🖥️", category: "Shopping" },
+  { label: "Health / pharmacy", icon: "💊", category: "Health" },
+  { label: "Doctor / hospital", icon: "🏥", category: "Health" },
+  { label: "Insurance", icon: "🛡️", category: "Insurance" },
+  { label: "EMI / loan payment", icon: "🏦", category: "Loans" },
+  { label: "Credit card payment", icon: "💳", category: "Loans" },
+  { label: "Education", icon: "📚", category: "Education" },
+  { label: "Courses / learning", icon: "🧠", category: "Education" },
+  { label: "Kids / school", icon: "🎒", category: "Family" },
+  { label: "Family support", icon: "👨‍👩‍👧", category: "Family" },
+  { label: "Entertainment", icon: "🎬", category: "Entertainment" },
+  { label: "Subscriptions", icon: "🔁", category: "Subscriptions" },
+  { label: "Gym / fitness", icon: "🏋️", category: "Health" },
+  { label: "Travel", icon: "✈️", category: "Travel" },
+  { label: "Hotel", icon: "🏨", category: "Travel" },
+  { label: "Gifts", icon: "🎁", category: "Gifts" },
+  { label: "Donations", icon: "🤲", category: "Charity" },
+  { label: "Pets", icon: "🐾", category: "Pets" },
+  { label: "Home maintenance", icon: "🛠️", category: "Housing" },
+  { label: "Personal care", icon: "💅", category: "Personal" },
+  { label: "Taxes", icon: "📑", category: "Taxes" },
+  { label: "Fees / fines", icon: "⚠️", category: "Fees" },
+  { label: "Other expense", icon: "➖", category: "Other" },
+];
+
+const ICON_OPTIONS = [
+  "💼", "🧑‍💻", "🎁", "📊", "🏢", "🤝", "↩️", "💳", "🏦", "📈", "🏠", "💵",
+  "🛒", "🍽️", "☕", "💡", "⚡", "📶", "📱", "⛽", "🚌", "🚕", "🛍️", "👕",
+  "💊", "🏥", "🛡️", "📚", "🎬", "🔁", "🏋️", "✈️", "🏨", "🐾", "🛠️", "💅",
+  "📑", "⚠️", "➕", "➖", "💰", "🧾", "🎯", "🌟", "❤️", "🎉", "📦", "🔑",
+];
+
+function presetsFor(kind: AddKind): DescPreset[] {
+  if (kind === "income") return INCOME_PRESETS;
+  if (kind === "expense") return EXPENSE_PRESETS;
+  return [];
+}
 
 function ym(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -123,8 +208,13 @@ export default function DailyInOutHub() {
   const [addKind, setAddKind] = useState<AddKind>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [description, setDescription] = useState("");
+  const [entryIcon, setEntryIcon] = useState("");
+  const [entryCategory, setEntryCategory] = useState("");
+  const [descOpen, setDescOpen] = useState(false);
+  const [iconOpen, setIconOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const [entryDate, setEntryDate] = useState(defaultDateForMonth(ym(new Date())));
+  const descWrapRef = useRef<HTMLDivElement>(null);
 
   const pickableMonths = useMemo(() => monthOptions(36, 6), []);
 
@@ -156,6 +246,30 @@ export default function DailyInOutHub() {
     window.addEventListener(DATA_CHANGED_EVENT, onChange);
     return () => window.removeEventListener(DATA_CHANGED_EVENT, onChange);
   }, [reload]);
+
+  useEffect(() => {
+    if (!descOpen && !iconOpen) return;
+    const onDoc = (e: Event) => {
+      const t = e.target as Node;
+      if (descWrapRef.current && !descWrapRef.current.contains(t)) {
+        setDescOpen(false);
+        setIconOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [descOpen, iconOpen]);
+
+  const filteredPresets = useMemo(() => {
+    const q = description.trim().toLowerCase();
+    const list = presetsFor(addKind);
+    if (!q) return list;
+    return list.filter(
+      (p) =>
+        p.label.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q),
+    );
+  }, [addKind, description]);
 
   const folderRows: FolderRow[] = useMemo(() => {
     const stats = new Map<string, FolderRow>();
@@ -244,6 +358,10 @@ export default function DailyInOutHub() {
     setAddKind(null);
     setEditingId(null);
     setDescription("");
+    setEntryIcon("");
+    setEntryCategory("");
+    setDescOpen(false);
+    setIconOpen(false);
     setAmount("");
     setEntryDate(defaultDateForMonth(openMonth));
   };
@@ -252,6 +370,10 @@ export default function DailyInOutHub() {
     setEditingId(null);
     setAddKind(kind);
     setDescription("");
+    setEntryIcon("");
+    setEntryCategory("");
+    setDescOpen(false);
+    setIconOpen(false);
     setAmount("");
     setEntryDate(defaultDateForMonth(openMonth));
   };
@@ -260,8 +382,19 @@ export default function DailyInOutHub() {
     setEditingId(t.id);
     setAddKind(t.type === "income" ? "income" : "expense");
     setDescription(t.description || "");
+    setEntryIcon(t.icon || "");
+    setEntryCategory(t.category || "");
+    setDescOpen(false);
+    setIconOpen(false);
     setAmount(String(t.amount ?? ""));
     setEntryDate(clampDateToMonth(t.date || defaultDateForMonth(openMonth), openMonth));
+  };
+
+  const pickPreset = (p: DescPreset) => {
+    setDescription(p.label);
+    setEntryIcon(p.icon);
+    setEntryCategory(p.category);
+    setDescOpen(false);
   };
 
   const handleSave = () => {
@@ -284,8 +417,9 @@ export default function DailyInOutHub() {
       description: description.trim(),
       amount: value,
       type: type as Transaction["type"],
-      category: type,
+      category: entryCategory.trim() || type,
       date,
+      icon: entryIcon || undefined,
     };
 
     if (editingId) {
@@ -550,13 +684,120 @@ export default function DailyInOutHub() {
                 </Button>
               </div>
             </div>
-            <Input
-              className="h-9"
-              placeholder="Description / note"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              autoFocus
-            />
+            <div ref={descWrapRef} className="relative space-y-2">
+              <div className="flex gap-2">
+                <div className="relative">
+                  <button
+                    type="button"
+                    title="Choose icon"
+                    onClick={() => {
+                      setIconOpen((v) => !v);
+                      setDescOpen(false);
+                    }}
+                    className="flex h-9 w-11 items-center justify-center rounded-md border border-border bg-background text-lg transition-colors hover:bg-muted"
+                  >
+                    {entryIcon || <Smile className="h-4 w-4 text-muted-foreground" />}
+                  </button>
+                  {iconOpen && (
+                    <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-[240px] rounded-xl border border-border bg-card p-2 shadow-xl">
+                      <p className="mb-1.5 px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Icon
+                      </p>
+                      <div className="grid max-h-44 grid-cols-8 gap-1 overflow-y-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEntryIcon("");
+                            setIconOpen(false);
+                          }}
+                          className="flex h-8 items-center justify-center rounded-md text-[10px] text-muted-foreground hover:bg-muted"
+                          title="No icon"
+                        >
+                          —
+                        </button>
+                        {ICON_OPTIONS.map((ic) => (
+                          <button
+                            key={ic}
+                            type="button"
+                            onClick={() => {
+                              setEntryIcon(ic);
+                              setIconOpen(false);
+                            }}
+                            className={cn(
+                              "flex h-8 items-center justify-center rounded-md text-base hover:bg-muted",
+                              entryIcon === ic && "bg-muted ring-1 ring-foreground/20",
+                            )}
+                          >
+                            {ic}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative flex-1">
+                  <Input
+                    className="h-9 pr-8"
+                    placeholder="Description / note — pick or type"
+                    value={description}
+                    onChange={(e) => {
+                      setDescription(e.target.value);
+                      setDescOpen(true);
+                      setIconOpen(false);
+                    }}
+                    onFocus={() => {
+                      setDescOpen(true);
+                      setIconOpen(false);
+                    }}
+                    autoFocus
+                  />
+                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  {descOpen && (
+                    <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-56 overflow-y-auto rounded-xl border border-border bg-card p-1 shadow-xl">
+                      <p className="px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {addKind === "income" ? "Income suggestions" : "Expense suggestions"}
+                      </p>
+                      {filteredPresets.length === 0 ? (
+                        <p className="px-2.5 py-2 text-xs text-muted-foreground">
+                          No match — keep typing your own description.
+                        </p>
+                      ) : (
+                        filteredPresets.map((p) => (
+                          <button
+                            key={`${p.category}-${p.label}`}
+                            type="button"
+                            onClick={() => pickPreset(p)}
+                            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted"
+                          >
+                            <span className="text-base leading-none">{p.icon}</span>
+                            <span className="min-w-0 flex-1 truncate font-medium">{p.label}</span>
+                            <span className="truncate text-[10px] text-muted-foreground">
+                              {p.category}
+                            </span>
+                          </button>
+                        ))
+                      )}
+                      {description.trim() &&
+                        !filteredPresets.some(
+                          (p) => p.label.toLowerCase() === description.trim().toLowerCase(),
+                        ) && (
+                          <button
+                            type="button"
+                            onClick={() => setDescOpen(false)}
+                            className="mt-0.5 flex w-full items-center gap-2.5 rounded-lg border border-dashed border-border px-2.5 py-2 text-left text-sm hover:bg-muted"
+                          >
+                            <span className="text-base leading-none">{entryIcon || "✏️"}</span>
+                            <span className="min-w-0 flex-1 truncate">
+                              Use custom: <span className="font-medium">{description.trim()}</span>
+                            </span>
+                          </button>
+                        )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <Input
                 className="h-9"
@@ -627,7 +868,11 @@ export default function DailyInOutHub() {
                 className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/15 px-3 py-2.5"
               >
                 <div className="pt-0.5 flex-shrink-0">
-                  {t.type === "income" ? (
+                  {t.icon ? (
+                    <span className="flex h-4 w-4 items-center justify-center text-base leading-none">
+                      {t.icon}
+                    </span>
+                  ) : t.type === "income" ? (
                     <ArrowDownCircle className="h-4 w-4 text-emerald-400" />
                   ) : (
                     <ArrowUpCircle className="h-4 w-4 text-rose-400" />
@@ -640,6 +885,7 @@ export default function DailyInOutHub() {
                   <p className="text-sm font-medium truncate mt-0.5">{t.description}</p>
                   <p className="text-[11px] text-muted-foreground">
                     {t.type === "income" ? "In" : "Out"}
+                    {t.category && t.category !== t.type ? ` · ${t.category}` : ""}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">

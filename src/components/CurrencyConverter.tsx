@@ -14,8 +14,7 @@ import {
   CurrencyInfo,
   currencyService,
 } from "@/services/currencyService";
-import { setAppCurrency, appCurrencyCode } from "@/services/regionService";
-import { toast } from "sonner";
+import { appCurrencyCode } from "@/services/regionService";
 
 interface BasketItem {
   id: string;
@@ -75,7 +74,6 @@ function CurrencySelect({
 const CurrencyConverter = () => {
   const [amount, setAmount] = useState("100");
   const [from, setFrom] = useState("USD");
-  const [appCurrency, setAppCurrencyState] = useState(appCurrencyCode());
   const [to, setTo] = useState(appCurrencyCode());
   const [updatedAt, setUpdatedAt] = useState(currencyService.getUpdatedAt());
   const [refreshing, setRefreshing] = useState(false);
@@ -90,19 +88,13 @@ const CurrencyConverter = () => {
   useEffect(() => {
     currencyService.refresh().then(() => setUpdatedAt(currencyService.getUpdatedAt()));
     return currencyService.subscribe(() => {
+      // Follow profile / app currency when it changes elsewhere
       const code = appCurrencyCode();
-      setAppCurrencyState(code);
+      setTo(code);
+      setBasketTarget(code);
       setUpdatedAt(currencyService.getUpdatedAt());
     });
   }, []);
-
-  const applyFinanceCurrency = (code: string) => {
-    const next = setAppCurrency(code);
-    setAppCurrencyState(next);
-    setTo(next);
-    setBasketTarget(next);
-    toast.success(`Finance currency set to ${next}`);
-  };
 
   const refresh = async () => {
     setRefreshing(true);
@@ -147,25 +139,7 @@ const CurrencyConverter = () => {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
-      {/* App-wide Finance currency */}
-      <div className="rounded-2xl border border-border bg-card p-5">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold">Finance currency</h3>
-            <p className="text-[11px] text-muted-foreground">
-              Change this and every Finance screen uses it (dashboard, bills, net worth, charts).
-            </p>
-          </div>
-          <CurrencySelect value={appCurrency} onChange={applyFinanceCurrency} />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Current: <span className="font-medium text-foreground">{appCurrency}</span>
-          {" · "}
-          {currencyService.getCurrency(appCurrency).name}
-        </p>
-      </div>
-
-      {/* Converter card */}
+      {/* Converter only — app-wide Finance currency lives in Profile / Settings */}
       <div className="rounded-2xl border border-border bg-card p-5">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">

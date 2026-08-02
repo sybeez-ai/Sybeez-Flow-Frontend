@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { NavLink } from "react-router-dom";
 import {
   CalendarDays,
   Wallet,
@@ -9,6 +10,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import NotificationCenter from "@/components/NotificationCenter";
+import { pathForView } from "@/appRoutes";
+import { usGetItem } from "@/services/userStorage";
 
 export type AppView =
   | "home"
@@ -48,7 +51,7 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
       };
     }
     try {
-      const raw = localStorage.getItem("sybeez_settings");
+      const raw = usGetItem("sybeez_settings");
       if (!raw) return { name: "User", initial: "U", picture: "" };
       const parsed = JSON.parse(raw);
       const name = (parsed?.account?.displayName || "").trim() || "User";
@@ -68,6 +71,7 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
       style={{ borderRight: "1px solid rgba(255,255,255,0.07)" }}
     >
       <button
+        type="button"
         onClick={onNewChat}
         data-tour="home-brand"
         className="flex items-center gap-2.5 px-4 h-16 transition-colors hover:bg-white/[0.04]"
@@ -88,13 +92,17 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
         <p className="px-2 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
           Workspace
         </p>
-        <div className="space-y-0.5">
+        <nav className="space-y-0.5" aria-label="Workspace">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
+            const path = pathForView(item.id);
             const isActive = activeView === item.id;
             return (
-              <button
+              <NavLink
                 key={item.id}
+                to={path}
+                end={path === "/"}
+                aria-current={isActive ? "page" : undefined}
                 onClick={() => onNavigate(item.id)}
                 className={`group relative w-full flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-all duration-150 ${
                   isActive
@@ -107,10 +115,10 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
                 )}
                 <Icon className="h-[17px] w-[17px] flex-none" />
                 <span className="truncate">{item.label}</span>
-              </button>
+              </NavLink>
             );
           })}
-        </div>
+        </nav>
       </div>
 
       <div
@@ -119,10 +127,15 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
       >
         <NotificationCenter onNavigate={onNavigate} />
 
-        <button
-          onClick={() => onNavigate("settings")}
+        <NavLink
+          to={pathForView("settings")}
+          end
           data-tour="profile"
-          className="w-full flex items-center gap-2.5 rounded-xl px-2 py-1.5 transition-all hover:bg-white/[0.05]"
+          aria-current={activeView === "settings" ? "page" : undefined}
+          onClick={() => onNavigate("settings")}
+          className={`w-full flex items-center gap-2.5 rounded-xl px-2 py-1.5 transition-all hover:bg-white/[0.05] ${
+            activeView === "settings" ? "bg-white/[0.06]" : ""
+          }`}
         >
           <div className="relative">
             {profile.picture ? (
@@ -142,7 +155,7 @@ const AppSidebar = ({ activeView, onNavigate, onNewChat }: AppSidebarProps) => {
           <div className="min-w-0 flex-1 text-left">
             <p className="truncate text-[13px] font-medium text-foreground">{profile.name}</p>
           </div>
-        </button>
+        </NavLink>
       </div>
     </aside>
   );

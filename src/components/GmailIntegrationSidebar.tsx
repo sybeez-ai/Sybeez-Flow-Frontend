@@ -237,6 +237,8 @@ interface OrgRule {
 
 interface GmailIntegrationSidebarProps {
   onClose: () => void;
+  activeTab?: TabId;
+  onTabChange?: (tab: TabId) => void;
 }
 
 const REASON_LABEL: Record<string, string> = {
@@ -246,7 +248,11 @@ const REASON_LABEL: Record<string, string> = {
   promo_senders: "Promo",
 };
 
-const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClose }) => {
+const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({
+  onClose,
+  activeTab: controlledTab,
+  onTabChange,
+}) => {
   const cached = useMemo(() => loadLocalCache(), []);
   const [accounts, setAccounts] = useState<EmailAccount[]>(() => cached.accounts || []);
   const [emails, setEmails] = useState<Email[]>(() => cached.emails || []);
@@ -254,7 +260,12 @@ const GmailIntegrationSidebar: React.FC<GmailIntegrationSidebarProps> = ({ onClo
   const [orgRules, setOrgRules] = useState<OrgRule[]>([]);
   const [labels, setLabels] = useState<GmailLabel[]>(() => cached.labels || []);
   const [settings] = useState(loadLocalSettings);
-  const [activeTab, setActiveTab] = useState<TabId>("inbox");
+  const [internalTab, setInternalTab] = useState<TabId>("inbox");
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = (tab: TabId) => {
+    if (onTabChange) onTabChange(tab);
+    else setInternalTab(tab);
+  };
   const [activeAccount, setActiveAccount] = useState<AccountFilter>(() => loadActiveAccount());
   const [searchTerm, setSearchTerm] = useState("");
   const [importantOnly, setImportantOnly] = useState(false);

@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Habit } from "@/types/dailyLife";
 import { cn } from "@/lib/utils";
+import { localISODay, shiftLocalDay } from "@/utils/dateUtils";
 
 interface HabitTrackerProps {
   habits: Habit[];
@@ -55,14 +56,10 @@ const HabitTracker = ({
     frequency: 'daily' as Habit['frequency']
   });
 
-  const today = new Date().toISOString().split('T')[0];
-  
-  // Get last 7 days
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - i));
-    return date.toISOString().split('T')[0];
-  });
+  const today = localISODay();
+
+  // Get last 7 days (local calendar)
+  const last7Days = Array.from({ length: 7 }, (_, i) => shiftLocalDay(today, -(6 - i)));
 
   // Check if habit is completed for a date
   const isCompletedForDate = (habit: Habit, date: string): boolean => {
@@ -296,6 +293,22 @@ const HabitTracker = ({
                   </div>
                   
                   {/* Actions */}
+                  {onEditHabit && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = window.prompt("Rename habit", habit.name);
+                        if (next == null) return;
+                        const name = next.trim();
+                        if (!name || name === habit.name) return;
+                        onEditHabit(habit.id, { name });
+                      }}
+                      className="p-1 hover:bg-muted/40 rounded transition-colors"
+                      title="Rename"
+                    >
+                      <Edit2 className="h-3.5 w-3.5 text-muted-foreground" />
+                    </button>
+                  )}
                   <button
                     onClick={() => onDeleteHabit(habit.id)}
                     className="p-1 hover:bg-red-500/10 rounded transition-colors"

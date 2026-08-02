@@ -21,7 +21,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { localISODay } from "@/utils/dateUtils";
 import { toast } from "sonner";
+import { usGetItem, usSetItem, usRemoveItem } from "@/services/userStorage";
 
 interface DataSyncProps {
   onDataImport: (data: any) => void;
@@ -46,7 +48,7 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [lastBackup, setLastBackup] = useState<BackupInfo | null>(() => {
-    const saved = localStorage.getItem('productivity_last_backup');
+    const saved = usGetItem('productivity_last_backup');
     return saved ? JSON.parse(saved) : null;
   });
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -66,7 +68,7 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
     ];
     
     keys.forEach(key => {
-      const item = localStorage.getItem(key);
+      const item = usGetItem(key);
       if (item) {
         totalSize += item.length * 2; // UTF-16 characters = 2 bytes
         try {
@@ -98,18 +100,18 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
         version: '1.0',
         exportDate: new Date().toISOString(),
         data: {
-          tasks: JSON.parse(localStorage.getItem('daily_tasks') || '[]'),
-          gymWorkouts: JSON.parse(localStorage.getItem('gym_workouts') || '[]'),
-          dietPlan: JSON.parse(localStorage.getItem('diet_plan') || '[]'),
-          waterIntake: parseInt(localStorage.getItem('water_intake') || '0'),
-          habits: JSON.parse(localStorage.getItem('productivity_habits') || '[]'),
-          goals: JSON.parse(localStorage.getItem('productivity_goals') || '[]'),
-          calendarEvents: JSON.parse(localStorage.getItem('calendar_events') || '[]'),
-          pomodoroSessions: JSON.parse(localStorage.getItem('pomodoro_sessions') || '[]'),
-          pomodoroSettings: JSON.parse(localStorage.getItem('pomodoro_settings') || '{}'),
-          dailyStats: JSON.parse(localStorage.getItem('daily_stats') || '[]'),
-          moods: JSON.parse(localStorage.getItem('mood_entries') || '[]'),
-          journals: JSON.parse(localStorage.getItem('journal_entries') || '[]')
+          tasks: JSON.parse(usGetItem('daily_tasks') || '[]'),
+          gymWorkouts: JSON.parse(usGetItem('gym_workouts') || '[]'),
+          dietPlan: JSON.parse(usGetItem('diet_plan') || '[]'),
+          waterIntake: parseInt(usGetItem('water_intake') || '0'),
+          habits: JSON.parse(usGetItem('productivity_habits') || '[]'),
+          goals: JSON.parse(usGetItem('productivity_goals') || '[]'),
+          calendarEvents: JSON.parse(usGetItem('calendar_events') || '[]'),
+          pomodoroSessions: JSON.parse(usGetItem('pomodoro_sessions') || '[]'),
+          pomodoroSettings: JSON.parse(usGetItem('pomodoro_settings') || '{}'),
+          dailyStats: JSON.parse(usGetItem('daily_stats') || '[]'),
+          moods: JSON.parse(usGetItem('mood_entries') || '[]'),
+          journals: JSON.parse(usGetItem('journal_entries') || '[]')
         }
       };
       
@@ -118,7 +120,7 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `productivity-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `productivity-backup-${localISODay()}.json`;
       a.click();
       URL.revokeObjectURL(url);
       
@@ -135,7 +137,7 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
           sessions: data.data.pomodoroSessions.length
         }
       };
-      localStorage.setItem('productivity_last_backup', JSON.stringify(backupInfo));
+      usSetItem('productivity_last_backup', JSON.stringify(backupInfo));
       setLastBackup(backupInfo);
       
       toast.success('Data exported successfully!');
@@ -166,18 +168,18 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
         }
         
         // Import data
-        if (data.data.tasks) localStorage.setItem('daily_tasks', JSON.stringify(data.data.tasks));
-        if (data.data.gymWorkouts) localStorage.setItem('gym_workouts', JSON.stringify(data.data.gymWorkouts));
-        if (data.data.dietPlan) localStorage.setItem('diet_plan', JSON.stringify(data.data.dietPlan));
-        if (data.data.waterIntake) localStorage.setItem('water_intake', data.data.waterIntake.toString());
-        if (data.data.habits) localStorage.setItem('productivity_habits', JSON.stringify(data.data.habits));
-        if (data.data.goals) localStorage.setItem('productivity_goals', JSON.stringify(data.data.goals));
-        if (data.data.calendarEvents) localStorage.setItem('calendar_events', JSON.stringify(data.data.calendarEvents));
-        if (data.data.pomodoroSessions) localStorage.setItem('pomodoro_sessions', JSON.stringify(data.data.pomodoroSessions));
-        if (data.data.pomodoroSettings) localStorage.setItem('pomodoro_settings', JSON.stringify(data.data.pomodoroSettings));
-        if (data.data.dailyStats) localStorage.setItem('daily_stats', JSON.stringify(data.data.dailyStats));
-        if (data.data.moods) localStorage.setItem('mood_entries', JSON.stringify(data.data.moods));
-        if (data.data.journals) localStorage.setItem('journal_entries', JSON.stringify(data.data.journals));
+        if (data.data.tasks) usSetItem('daily_tasks', JSON.stringify(data.data.tasks));
+        if (data.data.gymWorkouts) usSetItem('gym_workouts', JSON.stringify(data.data.gymWorkouts));
+        if (data.data.dietPlan) usSetItem('diet_plan', JSON.stringify(data.data.dietPlan));
+        if (data.data.waterIntake) usSetItem('water_intake', data.data.waterIntake.toString());
+        if (data.data.habits) usSetItem('productivity_habits', JSON.stringify(data.data.habits));
+        if (data.data.goals) usSetItem('productivity_goals', JSON.stringify(data.data.goals));
+        if (data.data.calendarEvents) usSetItem('calendar_events', JSON.stringify(data.data.calendarEvents));
+        if (data.data.pomodoroSessions) usSetItem('pomodoro_sessions', JSON.stringify(data.data.pomodoroSessions));
+        if (data.data.pomodoroSettings) usSetItem('pomodoro_settings', JSON.stringify(data.data.pomodoroSettings));
+        if (data.data.dailyStats) usSetItem('daily_stats', JSON.stringify(data.data.dailyStats));
+        if (data.data.moods) usSetItem('mood_entries', JSON.stringify(data.data.moods));
+        if (data.data.journals) usSetItem('journal_entries', JSON.stringify(data.data.journals));
         
         onDataImport(data.data);
         toast.success('Data imported successfully! Refresh to see changes.');
@@ -207,11 +209,11 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
         version: '1.0',
         exportDate: new Date().toISOString(),
         data: {
-          tasks: JSON.parse(localStorage.getItem('daily_tasks') || '[]'),
-          habits: JSON.parse(localStorage.getItem('productivity_habits') || '[]'),
-          goals: JSON.parse(localStorage.getItem('productivity_goals') || '[]'),
-          journals: JSON.parse(localStorage.getItem('journal_entries') || '[]'),
-          moods: JSON.parse(localStorage.getItem('mood_entries') || '[]')
+          tasks: JSON.parse(usGetItem('daily_tasks') || '[]'),
+          habits: JSON.parse(usGetItem('productivity_habits') || '[]'),
+          goals: JSON.parse(usGetItem('productivity_goals') || '[]'),
+          journals: JSON.parse(usGetItem('journal_entries') || '[]'),
+          moods: JSON.parse(usGetItem('mood_entries') || '[]')
         }
       };
       
@@ -231,7 +233,7 @@ const DataSync = ({ onDataImport, onDataExport, onDataClear }: DataSyncProps) =>
       'mood_entries', 'journal_entries', 'productivity_last_backup'
     ];
     
-    keys.forEach(key => localStorage.removeItem(key));
+    keys.forEach(key => usRemoveItem(key));
     setLastBackup(null);
     setShowClearConfirm(false);
     onDataClear();

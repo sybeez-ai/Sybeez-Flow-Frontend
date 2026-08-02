@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { JournalEntry } from "@/types/dailyLife";
 import { cn } from "@/lib/utils";
+import { localISODay, shiftLocalDay } from "@/utils/dateUtils";
 import { toast } from "sonner";
 
 interface DailyJournalProps {
@@ -57,7 +58,7 @@ const DailyJournal = ({
   const [editContent, setEditContent] = useState('');
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localISODay();
   const todayEntries = entries.filter(e => e.date === today).length;
   
   // Calculate streak
@@ -65,15 +66,15 @@ const DailyJournal = ({
     const dates = [...new Set(entries.map(e => e.date))].sort().reverse();
     if (dates.length === 0) return 0;
     
-    const todayStr = new Date().toISOString().split('T')[0];
-    const yesterdayStr = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    const todayStr = localISODay();
+    const yesterdayStr = shiftLocalDay(todayStr, -1);
     
     if (dates[0] !== todayStr && dates[0] !== yesterdayStr) return 0;
     
     let streak = 1;
     for (let i = 1; i < dates.length; i++) {
-      const current = new Date(dates[i - 1]);
-      const prev = new Date(dates[i]);
+      const current = new Date(`${dates[i - 1]}T12:00:00`);
+      const prev = new Date(`${dates[i]}T12:00:00`);
       const diff = (current.getTime() - prev.getTime()) / 86400000;
       if (diff === 1) streak++;
       else break;
@@ -158,13 +159,11 @@ const DailyJournal = ({
 
   // Format date display
   const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const todayDate = new Date();
-    const yesterday = new Date(todayDate);
-    yesterday.setDate(yesterday.getDate() - 1);
-    
-    if (dateStr === todayDate.toISOString().split('T')[0]) return 'Today';
-    if (dateStr === yesterday.toISOString().split('T')[0]) return 'Yesterday';
+    const todayStr = localISODay();
+    const yesterdayStr = shiftLocalDay(todayStr, -1);
+    if (dateStr === todayStr) return 'Today';
+    if (dateStr === yesterdayStr) return 'Yesterday';
+    const date = new Date(`${dateStr}T12:00:00`);
     return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   };
 

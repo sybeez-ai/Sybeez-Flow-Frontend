@@ -40,6 +40,8 @@ type FinanceTab =
 type Props = {
   onNavigate: (tab: FinanceTab) => void;
   healthScore: number;
+  healthLabel?: string;
+  healthHint?: string;
   sideIncome: number;
 };
 
@@ -62,6 +64,8 @@ function money(n: number) {
 export default function FinanceDashboard({
   onNavigate,
   healthScore,
+  healthLabel,
+  healthHint,
   sideIncome,
 }: Props) {
   useAppCurrency();
@@ -213,6 +217,7 @@ export default function FinanceDashboard({
             label="Health score"
             value={`${healthScore}/100`}
             valueClass={healthColor}
+            sub={healthLabel ? `${healthLabel}${healthHint ? ` · ${healthHint}` : ""}` : healthHint}
             icon={<Activity className="h-4 w-4" />}
           />
           <Kpi

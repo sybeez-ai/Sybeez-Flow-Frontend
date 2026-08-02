@@ -13,6 +13,7 @@ import {
   NOTIFICATIONS_CHANGED,
   clearAllNotifications,
   clearReadNotifications,
+  clearToastedNotificationKeys,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
@@ -22,6 +23,7 @@ import {
   upsertNotification,
   type UpsertInput,
 } from "@/services/notificationService";
+import { USER_SCOPE_CHANGED_EVENT } from "@/services/persistSync";
 
 interface NotificationContextValue {
   items: AppNotification[];
@@ -63,6 +65,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("storage", onChange);
     };
   }, [refresh]);
+
+  // Never show another account's in-memory notifications after login/logout
+  useEffect(() => {
+    const onScope = () => {
+      clearToastedNotificationKeys();
+      setItems([]);
+      setUnread(0);
+      refresh();
+      scan();
+    };
+    window.addEventListener(USER_SCOPE_CHANGED_EVENT, onScope);
+    return () => window.removeEventListener(USER_SCOPE_CHANGED_EVENT, onScope);
+  }, [refresh, scan]);
 
   // Initial + periodic scan
   useEffect(() => {

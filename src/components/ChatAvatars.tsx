@@ -5,6 +5,7 @@
 import { useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
+import { usGetItem } from "@/services/userStorage";
 
 /** Previous Sybeez Flow mark used across chat UIs. */
 export const SYBEEZ_LOGO_SRC = "/logo.png?v=7";
@@ -51,7 +52,7 @@ export function useChatUserProfile() {
       };
     }
     try {
-      const raw = localStorage.getItem("sybeez_settings");
+      const raw = usGetItem("sybeez_settings");
       if (!raw) return { name: "You", initial: "U", picture: "" };
       const parsed = JSON.parse(raw);
       const name = (parsed?.account?.displayName || "").trim() || "You";

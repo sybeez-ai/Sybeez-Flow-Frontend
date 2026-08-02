@@ -2,36 +2,13 @@
  * AgentService — Frontend WebSocket Client
  * ==========================================
  *
- * Connects to  ws://localhost:8000/api/agent/ws/{sessionId}
- *
- * Features
- * ---------
- * - Auto-reconnect with exponential back-off (max 8 s, up to 8 attempts)
- * - Heartbeat ping every 20 s to keep the connection alive
- * - Typed event bus (on / off)
- * - Audio transcription: send Blob → receive transcript via WS or HTTP fallback
- * - run() sends the user goal to the OpenClaw pipeline
- *
- * Server → Client message types
- * --------------------------------
- *   pipeline       { stage, detail, data? }
- *   screenshot     { screenshot, description, url }
- *   step_done      { step, description, action }
- *   data           { data: Record<string, string[]> }
- *   transcript     { text }
- *   security_summary { data }
- *   error          { detail }
- *   pong
- *   history        { history }
+ * Connects to  {wsBase}/api/agent/ws/{sessionId}
  */
 
-const BACKEND_WS =
-  (import.meta.env.VITE_BACKEND_WS as string | undefined) ||
-  "ws://localhost:8000";
+import { getApiBase, getWsBase } from "@/services/apiBase";
 
-const BACKEND_HTTP =
-  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
-  "http://localhost:8000";
+const BACKEND_WS = getWsBase();
+const BACKEND_HTTP = getApiBase();
 
 const WS_RECONNECT_MAX   = 8;
 const WS_PING_INTERVAL   = 20_000;  // ms

@@ -49,6 +49,8 @@ import {
   type Liability,
   type NetWorthSummary,
 } from "@/services/netWorthService";
+import { computeFinanceRollup, type RollupLine } from "@/services/financeRollup";
+import { DATA_CHANGED_EVENT } from "@/services/persistSync";
 import { CURRENCIES, currencyService } from "@/services/currencyService";
 import { setAppCurrency } from "@/services/regionService";
 
@@ -76,21 +78,53 @@ const emptyLiability = (display: string): Omit<Liability, "id"> => ({
 
 const NetWorthTracker = () => {
   const [tab, setTab] = useState<NWTab>("overview");
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   const refresh = () => setTick((t) => t + 1);
 
   useEffect(() => {
     const unsub = netWorthService.subscribe(refresh);
     currencyService.refresh();
-    return unsub;
+    const onLife = () => refresh();
+    window.addEventListener(DATA_CHANGED_EVENT, onLife);
+    return () => {
+      unsub();
+      window.removeEventListener(DATA_CHANGED_EVENT, onLife);
+    };
   }, []);
 
   const data = netWorthService.getData();
   const display = data.displayCurrency;
-  const summary: NetWorthSummary = useMemo(
+  const ledgerSummary: NetWorthSummary = useMemo(
     () => netWorthService.computeSummary(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tab, data.assets.length, data.liabilities.length, display]
+    [tick, tab, data.assets.length, data.liabilities.length, display],
+  );
+  const rollup = useMemo(
+    () => computeFinanceRollup(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tick, tab, data.assets.length, data.liabilities.length, display],
+  );
+  // Overview uses the full integrated picture (loans, people money, savings…)
+  const summary: NetWorthSummary = useMemo(
+    () => ({
+      ...ledgerSummary,
+      totalAssets: rollup.totalAssets,
+      totalLiabilities: rollup.totalLiabilities,
+      netWorth: rollup.netWorth,
+      liquidNetWorth:
+        rollup.buckets.netWorthLedgerAssets +
+        rollup.buckets.savings -
+        rollup.totalLiabilities,
+    }),
+    [ledgerSummary, rollup],
+  );
+  const linkedLiabilities = useMemo(
+    () => rollup.liabilities.filter((l) => l.source !== "net_worth"),
+    [rollup],
+  );
+  const linkedAssets = useMemo(
+    () => rollup.assets.filter((a) => a.source !== "net_worth"),
+    [rollup],
   );
 
   // --- Asset dialog state ---
@@ -291,7 +325,7 @@ const NetWorthTracker = () => {
   const TABS: { id: NWTab; label: string; icon: typeof Wallet; count?: number }[] = [
     { id: "overview", label: "Overview", icon: LayoutGrid },
     { id: "assets", label: "Assets", icon: Wallet, count: data.assets.length },
-    { id: "liabilities", label: "Liabilities", icon: Landmark, count: data.liabilities.length },
+    { id: "liabilities", label: "Liabilities", icon: Landmark, count: rollup.liabilities.length },
     { id: "history", label: "History", icon: History },
     { id: "projector", label: "Projector", icon: LineChartIcon },
   ];
@@ -307,7 +341,7 @@ const NetWorthTracker = () => {
               Net Worth
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {data.assets.length} assets · {data.liabilities.length} liabilities · all values in {display}
+              Full picture · loans, savings &amp; people money included · {display}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -373,13 +407,21 @@ const NetWorthTracker = () => {
 
       <div className="flex-1 overflow-y-auto p-6">
         {tab === "overview" && (
-          <Overview summary={summary} refCurrencies={refCurrencies} display={display} />
+          <Overview
+            summary={summary}
+            refCurrencies={refCurrencies}
+            display={display}
+            rollupBuckets={rollup.buckets}
+            linkedCount={linkedLiabilities.length + linkedAssets.length}
+          />
         )}
         {tab === "assets" && (
           <AssetsLedger
             assets={data.assets}
-            summary={summary}
+            summary={ledgerSummary}
             display={display}
+            linkedAssets={linkedAssets}
+            integratedTotal={rollup.totalAssets}
             onAdd={openAddAsset}
             onEdit={openEditAsset}
             onDelete={(id) => {
@@ -393,6 +435,7 @@ const NetWorthTracker = () => {
             liabilities={data.liabilities}
             summary={summary}
             display={display}
+            linkedLiabilities={linkedLiabilities}
             onAdd={openAddLiability}
             onEdit={openEditLiability}
             onDelete={(id) => {
@@ -833,15 +876,50 @@ const Overview = ({
   summary,
   refCurrencies,
   display,
+  rollupBuckets,
+  linkedCount,
 }: {
   summary: NetWorthSummary;
   refCurrencies: string[];
   display: string;
+  rollupBuckets: ReturnType<typeof computeFinanceRollup>["buckets"];
+  linkedCount: number;
 }) => {
   const donutData = summary.byCategory.filter((b) => b.value > 0);
 
   return (
     <div className="space-y-5 max-w-5xl">
+      <div className="rounded-2xl border border-border bg-muted/20 px-4 py-3 text-sm">
+        <p className="font-medium">Your complete money picture</p>
+        <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+          Net worth includes Net Worth ledger + Savings + Investments +{" "}
+          <span className="text-foreground">EMIs &amp; loans</span> + money you owe / collect
+          {linkedCount > 0 ? ` (${linkedCount} linked from other tabs)` : ""}.
+        </p>
+        <div className="mt-2.5 flex flex-wrap gap-2 text-[11px]">
+          {rollupBuckets.emis > 0 && (
+            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-rose-400">
+              Loans {fmt(rollupBuckets.emis, display)}
+            </span>
+          )}
+          {rollupBuckets.moneyToGive > 0 && (
+            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-rose-400">
+              To give {fmt(rollupBuckets.moneyToGive, display)}
+            </span>
+          )}
+          {rollupBuckets.moneyToCollect > 0 && (
+            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-400">
+              To collect {fmt(rollupBuckets.moneyToCollect, display)}
+            </span>
+          )}
+          {rollupBuckets.savings > 0 && (
+            <span className="rounded-full border border-border bg-background px-2.5 py-1 text-muted-foreground">
+              Savings {fmt(rollupBuckets.savings, display)}
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Net worth across currencies */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {refCurrencies.map((code, i) => {
@@ -1020,6 +1098,8 @@ const AssetsLedger = ({
   assets,
   summary,
   display,
+  linkedAssets = [],
+  integratedTotal,
   onAdd,
   onEdit,
   onDelete,
@@ -1027,6 +1107,8 @@ const AssetsLedger = ({
   assets: Asset[];
   summary: NetWorthSummary;
   display: string;
+  linkedAssets?: RollupLine[];
+  integratedTotal?: number;
   onAdd: () => void;
   onEdit: (a: Asset) => void;
   onDelete: (id: string) => void;
@@ -1041,11 +1123,51 @@ const AssetsLedger = ({
 
   return (
     <div className="max-w-5xl">
+      {typeof integratedTotal === "number" && (
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.03] p-4 mb-5">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            Total assets (integrated)
+          </p>
+          <p className="mt-1 text-2xl font-bold text-emerald-400 tabular-nums">
+            {fmt(integratedTotal, display)}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Ledger + savings, investments, and money to collect from Bills
+          </p>
+        </div>
+      )}
+
+      {linkedAssets.length > 0 && (
+        <div className="mb-5 rounded-2xl border border-border overflow-hidden">
+          <div className="border-b border-border bg-muted/30 px-4 py-2.5">
+            <p className="text-sm font-semibold">From Savings, Bills &amp; Investments</p>
+            <p className="text-[11px] text-muted-foreground">
+              Auto-included in net worth — edit them in their own tabs
+            </p>
+          </div>
+          <div className="divide-y divide-border">
+            {linkedAssets.map((a) => (
+              <div key={a.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{a.name}</p>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {a.manageIn || a.note}
+                  </p>
+                </div>
+                <p className="text-sm font-semibold tabular-nums text-emerald-400 flex-shrink-0">
+                  {fmt(a.amount, display)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-4 mb-4 flex-wrap">
         <div>
           <h3 className="text-lg font-semibold">Holdings Ledger</h3>
           <p className="text-xs text-muted-foreground">
-            {assets.length} positions · {fmt(summary.totalAssets, display)} total
+            {assets.length} manual positions · {fmt(summary.totalAssets, display)} in ledger
           </p>
         </div>
         <Button onClick={onAdd} size="sm">
@@ -1154,6 +1276,7 @@ const LiabilitiesLedger = ({
   liabilities,
   summary,
   display,
+  linkedLiabilities = [],
   onAdd,
   onEdit,
   onDelete,
@@ -1161,6 +1284,7 @@ const LiabilitiesLedger = ({
   liabilities: Liability[];
   summary: NetWorthSummary;
   display: string;
+  linkedLiabilities?: RollupLine[];
   onAdd: () => void;
   onEdit: (l: Liability) => void;
   onDelete: (id: string) => void;
@@ -1174,12 +1298,39 @@ const LiabilitiesLedger = ({
         {fmt(summary.totalLiabilities, display)}
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        Across {liabilities.length} {liabilities.length === 1 ? "entry" : "entries"}
+        Loans, money to give, unpaid bills + {liabilities.length} manual{" "}
+        {liabilities.length === 1 ? "entry" : "entries"}
       </p>
     </div>
 
+    {linkedLiabilities.length > 0 && (
+      <div className="mb-5 rounded-2xl border border-border overflow-hidden">
+        <div className="border-b border-border bg-muted/30 px-4 py-2.5">
+          <p className="text-sm font-semibold">From Bills (EMIs, loans &amp; money to give)</p>
+          <p className="text-[11px] text-muted-foreground">
+            Auto-counted here — edit them under Bills so everything stays in sync
+          </p>
+        </div>
+        <div className="divide-y divide-border">
+          {linkedLiabilities.map((l) => (
+            <div key={l.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{l.name}</p>
+                <p className="text-[11px] text-muted-foreground truncate">
+                  {l.note || l.manageIn}
+                </p>
+              </div>
+              <p className="text-sm font-semibold tabular-nums text-red-400 flex-shrink-0">
+                {fmt(l.amount, display)}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
     <div className="flex items-center justify-between gap-4 mb-4 flex-wrap">
-      <h3 className="text-lg font-semibold">Liabilities Ledger</h3>
+      <h3 className="text-lg font-semibold">Manual liabilities</h3>
       <Button onClick={onAdd} size="sm" variant="destructive">
         <Plus className="h-4 w-4 mr-1" /> Add Liability
       </Button>
@@ -1187,7 +1338,9 @@ const LiabilitiesLedger = ({
 
     <div className="rounded-2xl border border-border overflow-hidden">
       {liabilities.length === 0 ? (
-        <p className="text-sm text-muted-foreground text-center py-12">No liabilities. 🎉</p>
+        <p className="text-sm text-muted-foreground text-center py-12">
+          No manual liabilities. Loans from Bills still count above.
+        </p>
       ) : (
         <div className="divide-y divide-border">
           <div className="hidden sm:grid grid-cols-12 gap-2 px-4 py-2 text-[11px] uppercase tracking-wider text-muted-foreground">

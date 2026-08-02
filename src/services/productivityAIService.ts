@@ -1,4 +1,5 @@
 import { usGetItem, usRemoveItem, usSetItem } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
 /**
  * Productivity AI Service - Claude Integration for Smart Coaching
  * Production-level implementation with context-aware AI assistance
@@ -14,7 +15,7 @@ import {
   WeeklyAnalytics 
 } from "@/types/dailyLife";
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = getApiBase();
 
 export interface ProductivityAIResponse {
   message: string;

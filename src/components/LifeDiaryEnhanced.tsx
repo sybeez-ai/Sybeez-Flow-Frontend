@@ -7,7 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   BookOpen, Heart, Lightbulb, Trophy, BookMarked, TrendingUp, Calendar,
   Brain, Trash2, Search, Plus, X, Flame, Zap, Sparkles, Award,
-  ArrowUp, ArrowDown, Minus, Sun
+  ArrowUp, ArrowDown, Minus, Sun, Pencil, Check
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from "@/lib/utils";
@@ -163,17 +163,19 @@ function mergeById<T extends { id: string }>(local: T[], remote: T[]): T[] {
 }
 
 function mergeDiaryData(local: LifeDiaryData, remote: LifeDiaryData): LifeDiaryData {
+  const localRefl = Array.isArray(local.weeklyReflections) ? local.weeklyReflections : [];
+  const remoteRefl = Array.isArray(remote.weeklyReflections) ? remote.weeklyReflections : [];
   return {
-    entries: mergeById(local.entries, remote.entries).sort((a, b) =>
+    entries: mergeById(local.entries || [], remote.entries || []).sort((a, b) =>
       b.date.localeCompare(a.date) || Number(b.id) - Number(a.id)
     ),
-    memories: mergeById(local.memories, remote.memories),
-    thoughts: mergeById(local.thoughts, remote.thoughts),
-    gratitude: mergeById(local.gratitude, remote.gratitude),
+    memories: mergeById(local.memories || [], remote.memories || []),
+    thoughts: mergeById(local.thoughts || [], remote.thoughts || []),
+    gratitude: mergeById(local.gratitude || [], remote.gratitude || []),
     growthMetrics: local.growthMetrics?.length ? local.growthMetrics : remote.growthMetrics,
     weeklyReflections: mergeById(
-      local.weeklyReflections.map((w, i) => ({ id: w.week || String(i), ...w })) as any,
-      remote.weeklyReflections.map((w, i) => ({ id: w.week || String(i), ...w })) as any
+      localRefl.map((w, i) => ({ id: w.week || String(i), ...w })) as any,
+      remoteRefl.map((w, i) => ({ id: w.week || String(i), ...w })) as any
     ).map(({ id: _id, ...rest }: any) => rest),
   };
 }
@@ -252,8 +254,17 @@ const SIDEBAR_ITEMS: { id: TabId; label: string; icon: React.FC<{ className?: st
   { id: 'ai-reflection', label: 'Insights', icon: Brain },
 ];
 
-const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const [activeTab, setActiveTab] = useState<TabId>('today');
+const LifeDiaryEnhanced: React.FC<{
+  onClose: () => void;
+  activeTab?: TabId;
+  onTabChange?: (tab: TabId) => void;
+}> = ({ onClose, activeTab: controlledTab, onTabChange }) => {
+  const [internalTab, setInternalTab] = useState<TabId>('today');
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = (tab: TabId) => {
+    if (onTabChange) onTabChange(tab);
+    else setInternalTab(tab);
+  };
   const [data, setDataState] = useState<LifeDiaryData>(loadDiaryData);
   const [isRecording, setIsRecording] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -276,6 +287,14 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [timelineSearch, setTimelineSearch] = useState('');
   const [winTitle, setWinTitle] = useState('');
   const [winDesc, setWinDesc] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{
+    title?: string;
+    content?: string;
+    description?: string;
+    category?: string;
+    itemsText?: string;
+  }>({});
 
   // Set data with auto-sync
   const setData = useCallback((updater: React.SetStateAction<LifeDiaryData>) => {
@@ -298,6 +317,18 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     };
     window.addEventListener("sybeez:data-changed", onChanged);
     return () => window.removeEventListener("sybeez:data-changed", onChanged);
+  }, []);
+
+  // AI chat asks to open the right diary tab after add/edit
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab as TabId | undefined;
+      if (tab && SIDEBAR_ITEMS.some((s) => s.id === tab)) {
+        setActiveTab(tab);
+      }
+    };
+    window.addEventListener("sybeez:diary-open-tab", onTab);
+    return () => window.removeEventListener("sybeez:diary-open-tab", onTab);
   }, []);
 
   // Local-first: never replace local vaults with empty backend data.
@@ -482,8 +513,111 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       ...prev,
       entries: prev.entries.filter(e => e.id !== id),
     }));
+    if (editingId === id) setEditingId(null);
     toast.success('Entry deleted', { position: 'top-center', duration: 1500 });
-  }, [setData]);
+  }, [setData, editingId]);
+
+  const startEditEntry = useCallback((entry: DiaryEntry) => {
+    setEditingId(entry.id);
+    setEditDraft({ title: entry.title, content: entry.content });
+  }, []);
+
+  const saveEditEntry = useCallback(() => {
+    if (!editingId) return;
+    setData(prev => ({
+      ...prev,
+      entries: prev.entries.map(e =>
+        e.id === editingId
+          ? {
+              ...e,
+              title: (editDraft.title || e.title).trim() || e.title,
+              content: (editDraft.content || e.content).trim() || e.content,
+            }
+          : e,
+      ),
+    }));
+    setEditingId(null);
+    setEditDraft({});
+    toast.success('Entry updated', { position: 'top-center', duration: 1500 });
+  }, [editingId, editDraft, setData]);
+
+  const startEditThought = useCallback((t: Thought) => {
+    setEditingId(t.id);
+    setEditDraft({ content: t.content, category: t.category });
+  }, []);
+
+  const saveEditThought = useCallback(() => {
+    if (!editingId) return;
+    const cat = (editDraft.category || 'dream') as ThoughtCategory;
+    setData(prev => ({
+      ...prev,
+      thoughts: prev.thoughts.map(t =>
+        t.id === editingId
+          ? {
+              ...t,
+              content: (editDraft.content || t.content).trim() || t.content,
+              category: (['dream', 'startup', 'creative', 'future'] as const).includes(
+                cat as ThoughtCategory,
+              )
+                ? cat
+                : t.category,
+            }
+          : t,
+      ),
+    }));
+    setEditingId(null);
+    setEditDraft({});
+    toast.success('Thought updated', { position: 'top-center', duration: 1500 });
+  }, [editingId, editDraft, setData]);
+
+  const startEditMemory = useCallback((m: Memory) => {
+    setEditingId(m.id);
+    setEditDraft({ title: m.title, description: m.description });
+  }, []);
+
+  const saveEditMemory = useCallback(() => {
+    if (!editingId) return;
+    setData(prev => ({
+      ...prev,
+      memories: prev.memories.map(m =>
+        m.id === editingId
+          ? {
+              ...m,
+              title: (editDraft.title || m.title).trim() || m.title,
+              description:
+                (editDraft.description || m.description).trim() || m.description,
+            }
+          : m,
+      ),
+    }));
+    setEditingId(null);
+    setEditDraft({});
+    toast.success('Memory updated', { position: 'top-center', duration: 1500 });
+  }, [editingId, editDraft, setData]);
+
+  const startEditGratitude = useCallback((g: { id: string; items: string[] }) => {
+    setEditingId(g.id);
+    setEditDraft({ itemsText: (g.items || []).join('\n') });
+  }, []);
+
+  const saveEditGratitude = useCallback(() => {
+    if (!editingId) return;
+    const items = String(editDraft.itemsText || '')
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (!items.length) {
+      toast.error('Add at least one gratitude item');
+      return;
+    }
+    setData(prev => ({
+      ...prev,
+      gratitude: prev.gratitude.map(g => (g.id === editingId ? { ...g, items } : g)),
+    }));
+    setEditingId(null);
+    setEditDraft({});
+    toast.success('Gratitude updated', { position: 'top-center', duration: 1500 });
+  }, [editingId, editDraft, setData]);
 
   const deleteMemory = useCallback((id: string) => {
     setData(prev => ({ ...prev, memories: prev.memories.filter(m => m.id !== id) }));
@@ -749,21 +883,56 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           {data.entries.slice(0, 5).map(entry => (
             <Card key={entry.id} className="border-border/50 bg-muted/10">
               <CardContent className="p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-muted-foreground">{formatDate(entry.date)}</p>
-                    <p className="font-medium text-sm">{entry.title}</p>
-                    <p className="text-sm text-foreground/90 mt-1 whitespace-pre-wrap">{entry.content}</p>
+                {editingId === entry.id ? (
+                  <div className="space-y-2">
+                    <Input
+                      value={editDraft.title || ''}
+                      onChange={e => setEditDraft(d => ({ ...d, title: e.target.value }))}
+                      className="text-sm h-9"
+                      placeholder="Title"
+                    />
+                    <textarea
+                      value={editDraft.content || ''}
+                      onChange={e => setEditDraft(d => ({ ...d, content: e.target.value }))}
+                      className="w-full min-h-[100px] p-2 text-sm bg-muted/10 border border-border rounded-md"
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={saveEditEntry} className="bg-white text-black hover:bg-gray-200">
+                        <Check className="h-3.5 w-3.5 mr-1" /> Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    onClick={() => deleteEntry(entry.id)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-muted-foreground">{formatDate(entry.date)}</p>
+                      <p className="font-medium text-sm">{entry.title}</p>
+                      <p className="text-sm text-foreground/90 mt-1 whitespace-pre-wrap">{entry.content}</p>
+                    </div>
+                    <div className="flex shrink-0 gap-0.5">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        title="Edit"
+                        onClick={() => startEditEntry(entry)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        onClick={() => deleteEntry(entry.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))}
@@ -836,26 +1005,58 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             {list.map(memory => (
               <Card key={memory.id} className="border-border/50 bg-muted/10 hover:bg-muted/15 transition-colors">
                 <CardContent className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[11px] text-muted-foreground">{formatDate(memory.date)}</p>
-                      <p className="font-medium text-sm mt-1 text-foreground">{memory.title}</p>
-                      {memory.description && memory.description !== memory.title && (
-                        <p className="text-sm text-foreground/85 mt-2 whitespace-pre-wrap leading-relaxed">
-                          {memory.description}
-                        </p>
-                      )}
+                  {editingId === memory.id ? (
+                    <div className="space-y-2">
+                      <Input
+                        value={editDraft.title || ''}
+                        onChange={e => setEditDraft(d => ({ ...d, title: e.target.value }))}
+                        className="text-sm h-9"
+                      />
+                      <textarea
+                        value={editDraft.description || ''}
+                        onChange={e => setEditDraft(d => ({ ...d, description: e.target.value }))}
+                        className="w-full min-h-[90px] p-2 text-sm bg-muted/10 border border-border rounded-md"
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={saveEditMemory} className="bg-white text-black hover:bg-gray-200">
+                          <Check className="h-3.5 w-3.5 mr-1" /> Save
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
+                      </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => deleteMemory(memory.id)}
-                      title="Remove memory"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] text-muted-foreground">{formatDate(memory.date)}</p>
+                        <p className="font-medium text-sm mt-1 text-foreground">{memory.title}</p>
+                        {memory.description && memory.description !== memory.title && (
+                          <p className="text-sm text-foreground/85 mt-2 whitespace-pre-wrap leading-relaxed">
+                            {memory.description}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 gap-0.5">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground"
+                          onClick={() => startEditMemory(memory)}
+                          title="Edit memory"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={() => deleteMemory(memory.id)}
+                          title="Remove memory"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ))}
@@ -907,16 +1108,47 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           {data.thoughts.map(thought => (
             <Card key={thought.id} className="border-border/50 bg-muted/10">
               <CardContent className="p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-xs text-muted-foreground">{formatDate(thought.date)}</p>
-                    <p className="text-sm">{thought.content}</p>
-                    <span className="inline-block text-xs bg-muted/30 px-2 py-1 rounded mt-2 capitalize">{thought.category}</span>
+                {editingId === thought.id ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={editDraft.content || ''}
+                      onChange={e => setEditDraft(d => ({ ...d, content: e.target.value }))}
+                      className="w-full min-h-[80px] p-2 text-sm bg-muted/10 border border-border rounded-md"
+                    />
+                    <select
+                      value={editDraft.category || thought.category}
+                      onChange={e => setEditDraft(d => ({ ...d, category: e.target.value }))}
+                      className="w-full p-2 text-sm bg-muted/10 border border-border rounded-md"
+                    >
+                      <option value="dream">Dream</option>
+                      <option value="startup">Startup Idea</option>
+                      <option value="creative">Creative</option>
+                      <option value="future">Future Plan</option>
+                    </select>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={saveEditThought} className="bg-white text-black hover:bg-gray-200">
+                        <Check className="h-3.5 w-3.5 mr-1" /> Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
+                    </div>
                   </div>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => deleteThought(thought.id)}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">{formatDate(thought.date)}</p>
+                      <p className="text-sm">{thought.content}</p>
+                      <span className="inline-block text-xs bg-muted/30 px-2 py-1 rounded mt-2 capitalize">{thought.category}</span>
+                    </div>
+                    <div className="flex shrink-0 gap-0.5">
+                      <Button variant="ghost" size="icon" className="h-6 w-6" title="Edit" onClick={() => startEditThought(thought)}>
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => deleteThought(thought.id)}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))}
@@ -965,22 +1197,44 @@ const LifeDiaryEnhanced: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           {data.gratitude.map(g => (
             <Card key={g.id} className="border-border/50 bg-muted/10">
               <CardContent className="p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-xs text-muted-foreground">{formatDate(g.date)}</p>
-                    <ul className="mt-1 space-y-0.5">
-                      {g.items.map((item, i) => (
-                        <li key={i} className="text-sm text-foreground flex gap-2">
-                          <Sun className="h-3.5 w-3.5 text-yellow-500 shrink-0 mt-0.5" />
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
+                {editingId === g.id ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-muted-foreground">One item per line</p>
+                    <textarea
+                      value={editDraft.itemsText || ''}
+                      onChange={e => setEditDraft(d => ({ ...d, itemsText: e.target.value }))}
+                      className="w-full min-h-[90px] p-2 text-sm bg-muted/10 border border-border rounded-md"
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={saveEditGratitude} className="bg-white text-black hover:bg-gray-200">
+                        <Check className="h-3.5 w-3.5 mr-1" /> Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
+                    </div>
                   </div>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => deleteGratitude(g.id)}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">{formatDate(g.date)}</p>
+                      <ul className="mt-1 space-y-0.5">
+                        {g.items.map((item, i) => (
+                          <li key={i} className="text-sm text-foreground flex gap-2">
+                            <Sun className="h-3.5 w-3.5 text-yellow-500 shrink-0 mt-0.5" />
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="flex shrink-0 gap-0.5">
+                      <Button variant="ghost" size="icon" className="h-6 w-6" title="Edit" onClick={() => startEditGratitude(g)}>
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => deleteGratitude(g.id)}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))}

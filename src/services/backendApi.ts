@@ -10,7 +10,7 @@ import { getApiBase } from "@/services/apiBase";
  * - Gmail data tracking
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE_URL = getApiBase();
 
 interface ApiResponse<T> {
   success: boolean;

@@ -1,4 +1,6 @@
-const BASE = "http://localhost:8000";
+import { getApiBase } from "@/services/apiBase";
+
+const BASE = getApiBase();
 
 export interface DesignOption {
   id: string;

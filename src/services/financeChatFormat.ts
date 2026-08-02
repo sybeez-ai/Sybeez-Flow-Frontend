@@ -47,22 +47,36 @@ export function formatFinanceOverview(snap: Record<string, unknown>): string {
   const emis = Array.isArray(data.emis) ? data.emis : [];
   const upcoming = Array.isArray(data.upcomingPayments) ? data.upcomingPayments : [];
 
+  const portfolio = (data.portfolio || {}) as Record<string, unknown>;
+  const holdings = Array.isArray(portfolio.stocks) ? portfolio.stocks : [];
+  const label = String(month.label || month.key || "This month");
+
   const lines: string[] = [];
-  lines.push("Here’s a clear overview of your **Finance Manager**:");
+  lines.push("I'm **Sybeez Flow** — here's a clear look at your **Finance Manager**.");
+  lines.push("");
+  lines.push("```mindmap");
+  lines.push("Finance overview");
+  lines.push(`  ${label}`);
+  lines.push("  Savings");
+  lines.push("  Bills & EMIs");
+  lines.push("  Investments");
+  lines.push("  Net position");
+  lines.push("```");
   lines.push("");
 
-  const label = String(month.label || month.key || "This month");
-  lines.push(`**📅 ${label}**`);
+  lines.push(`## 📅 ${label}`);
   lines.push("");
   lines.push(
-    `- 💰 **In:** ${money(month.income, currency)}  ·  **Out:** ${money(month.expense, currency)}  ·  **Balance:** ${money(month.balance, currency)}`,
+    `- 💰 **In:** ${money(month.income, currency)}`,
   );
+  lines.push(`- 💸 **Out:** ${money(month.expense, currency)}`);
+  lines.push(`- ✅ **Balance:** ${money(month.balance, currency)}`);
   if (month.transactionCount != null) {
-    lines.push(`- 🧾 ${month.transactionCount} transactions logged`);
+    lines.push(`- 🧾 **${month.transactionCount}** transactions logged`);
   }
   lines.push("");
 
-  lines.push("**🏦 Savings**");
+  lines.push("## 🏦 Savings");
   lines.push("");
   lines.push(`- **Total:** ${money(totals.savings, currency)}`);
   if (savingsItems.length) {
@@ -77,11 +91,12 @@ export function formatFinanceOverview(snap: Record<string, unknown>): string {
   }
   lines.push("");
 
-  lines.push("**📄 Bills & EMIs**");
+  lines.push("## 📄 Bills & EMIs");
   lines.push("");
   lines.push(
-    `- **Monthly EMI:** ${money(totals.emiMonthly, currency)}  ·  **Remaining:** ${money(totals.emiRemainingBalance, currency)}`,
+    `- **Monthly EMI:** ${money(totals.emiMonthly, currency)}`,
   );
+  lines.push(`- **Remaining:** ${money(totals.emiRemainingBalance, currency)}`);
   for (const raw of emis.slice(0, 6)) {
     const e = raw as Record<string, unknown>;
     const bits = [`**${e.name || "Loan"}**`, `${money(e.monthlyAmount, currency)}/mo`];
@@ -97,13 +112,17 @@ export function formatFinanceOverview(snap: Record<string, unknown>): string {
   }
   lines.push("");
 
-  const portfolio = (data.portfolio || {}) as Record<string, unknown>;
-  const holdings = Array.isArray(portfolio.stocks) ? portfolio.stocks : [];
-  lines.push("**📈 Investment portfolio**");
+  lines.push("## 📈 Investment portfolio");
   lines.push("");
   if (holdings.length) {
     lines.push(
-      `- **Invested:** ${money(portfolio.total_invested ?? totals.portfolioInvested, currency)}  ·  **Current:** ${money(portfolio.total_current ?? totals.portfolioCurrent, currency)}  ·  **P&L:** ${money(portfolio.total_pl ?? totals.portfolioPl, currency)} (${Number(portfolio.total_pl_pct ?? totals.portfolioPlPct ?? 0).toFixed(2)}%)`,
+      `- **Invested:** ${money(portfolio.total_invested ?? totals.portfolioInvested, currency)}`,
+    );
+    lines.push(
+      `- **Current:** ${money(portfolio.total_current ?? totals.portfolioCurrent, currency)}`,
+    );
+    lines.push(
+      `- **P&L:** ${money(portfolio.total_pl ?? totals.portfolioPl, currency)} (**${Number(portfolio.total_pl_pct ?? totals.portfolioPlPct ?? 0).toFixed(2)}%**)`,
     );
     for (const raw of holdings.slice(0, 8)) {
       const s = raw as Record<string, unknown>;
@@ -117,19 +136,19 @@ export function formatFinanceOverview(snap: Record<string, unknown>): string {
   }
   lines.push("");
 
-  lines.push("**🧮 Net position**");
+  lines.push("## 🧮 Net position");
   lines.push("");
   const assets =
     (Number(totals.assets) || 0) +
     (Number(totals.savings) || 0) +
     (Number(totals.portfolioCurrent) || Number(portfolio.total_current) || 0);
-  lines.push(`- **Assets/savings/portfolio:** ${money(assets, currency)}`);
+  lines.push(`- **Assets / savings / portfolio:** ${money(assets, currency)}`);
   lines.push(`- **Liabilities:** ${money(totals.liabilities, currency)}`);
   lines.push(`- ✅ **Approx. net worth:** ${money(totals.netWorthApprox, currency)}`);
 
   if (upcoming.length) {
     lines.push("");
-    lines.push("**⏰ Coming up**");
+    lines.push("## ⏰ Coming up");
     lines.push("");
     for (const raw of upcoming.slice(0, 5)) {
       const p = raw as Record<string, unknown>;
@@ -140,9 +159,9 @@ export function formatFinanceOverview(snap: Record<string, unknown>): string {
   }
 
   lines.push("");
-  lines.push(
-    "Ask me anything — portfolio, savings, EMIs, bills, In & Out, or market news.",
-  );
+  lines.push("## 💡 Next steps");
+  lines.push("");
+  lines.push("- Ask about portfolio, savings, EMIs, bills, In & Out, or market news.");
   return lines.join("\n");
 }
 
@@ -158,32 +177,42 @@ export function formatPortfolioOverview(snap: Record<string, unknown>): string {
   const holdings = Array.isArray(portfolio.stocks) ? portfolio.stocks : [];
   if (!holdings.length) {
     return (
-      "**📈 Your portfolio**\n\n" +
+      "I'm **Sybeez Flow** — happy to help with your investments.\n\n" +
+      "## 📈 Your portfolio\n\n" +
       "Your Investment Hub is empty right now.\n\n" +
-      "- 💡 Add stocks under **Investments** and I’ll track live prices, P&L, and answer market questions with web search + RAG."
+      "- 💡 Add stocks under **Investments** and I’ll track live prices, P&L, and market context for you."
     );
   }
   const lines: string[] = [
-    "**📈 Here’s your live portfolio**",
+    "I'm **Sybeez Flow** — here's your **live portfolio** at a glance.",
+    "",
+    "```mindmap",
+    "Your portfolio",
+    "  Value",
+    "  P&L",
+    "  Holdings",
+    "```",
+    "",
+    "## 📈 Portfolio summary",
     "",
     `- 💰 **Invested:** ${money(portfolio.total_invested, currency)}`,
     `- 📊 **Current value:** ${money(portfolio.total_current, currency)}`,
-    `- ✅ **P&L:** ${money(portfolio.total_pl, currency)} (${Number(portfolio.total_pl_pct || 0).toFixed(2)}%)`,
+    `- ✅ **P&L:** ${money(portfolio.total_pl, currency)} (**${Number(portfolio.total_pl_pct || 0).toFixed(2)}%**)`,
     "",
-    "**Holdings**",
+    "## 📌 Holdings",
     "",
   ];
   for (const raw of holdings.slice(0, 20)) {
     const s = raw as Record<string, unknown>;
     const cur = String(s.currency || currency);
     lines.push(
-      `- 📌 **${s.symbol}**${s.name ? ` (${s.name})` : ""} — ${s.qty} shares · avg ${money(s.avg_buy_price, cur)} · now ${money(s.price, cur)} · value ${money(s.current_value, cur)} · P&L ${money(s.pl, cur)} (${Number(s.pl_pct || 0).toFixed(2)}%) · day ${Number(s.change_pct || 0).toFixed(2)}%`,
+      `- **${s.symbol}**${s.name ? ` (${s.name})` : ""} — ${s.qty} shares · avg ${money(s.avg_buy_price, cur)} · now ${money(s.price, cur)} · value ${money(s.current_value, cur)} · P&L ${money(s.pl, cur)} (${Number(s.pl_pct || 0).toFixed(2)}%) · day ${Number(s.change_pct || 0).toFixed(2)}%`,
     );
   }
   lines.push("");
-  lines.push(
-    "Ask about a ticker, allocation, or today’s market news — I’ll use your holdings plus live web intel.",
-  );
+  lines.push("## 💡 Next steps");
+  lines.push("");
+  lines.push("- Ask about a ticker, allocation, or today’s market news.");
   return lines.join("\n");
 }
 
@@ -201,7 +230,8 @@ export function sanitizeAssistantText(
   }
 
   let candidate = raw;
-  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  // Only unwrap JSON fences — never strip ```mindmap``` or other code blocks
+  const fence = raw.match(/```json\s*([\s\S]*?)```/i);
   if (fence) candidate = fence[1].trim();
 
   const looksJson =
@@ -210,7 +240,13 @@ export function sanitizeAssistantText(
     (candidate.includes('"thisMonth"') && candidate.includes('"totals"')) ||
     (candidate.includes('"reply"') && candidate.includes('"actions"'));
 
-  if (!looksJson) return raw;
+  if (!looksJson) {
+    // Never show search-provider branding in the chat UI
+    return raw
+      .replace(/\bTavily\s+summary\b/gi, "Market research")
+      .replace(/\bTavily\b/gi, "market research")
+      .replace(/\bSerpAPI\b/gi, "web search");
+  }
 
   try {
     const start = candidate.indexOf("{");

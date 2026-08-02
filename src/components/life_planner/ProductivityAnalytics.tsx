@@ -20,6 +20,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { DailyStats, WeeklyAnalytics } from "@/types/dailyLife";
 import { cn } from "@/lib/utils";
+import { localISODay, shiftLocalDay } from "@/utils/dateUtils";
 
 interface ProductivityAnalyticsProps {
   dailyStats: DailyStats[];
@@ -31,12 +32,8 @@ const DAYS_SHORT = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const ProductivityAnalytics = ({ dailyStats, weeklyAnalytics }: ProductivityAnalyticsProps) => {
   // Get last 7 days stats
   const last7DaysStats = useMemo(() => {
-    const dates: string[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      dates.push(date.toISOString().split('T')[0]);
-    }
+    const today = localISODay();
+    const dates = Array.from({ length: 7 }, (_, i) => shiftLocalDay(today, -(6 - i)));
     
     return dates.map(date => {
       const stat = dailyStats.find(s => s.date === date);
@@ -99,7 +96,7 @@ const ProductivityAnalytics = ({ dailyStats, weeklyAnalytics }: ProductivityAnal
   const maxProductivity = Math.max(...last7DaysStats.map(s => s.productivityScore), 1);
 
   // Today's stats
-  const today = new Date().toISOString().split('T')[0];
+  const today = localISODay();
   const todayStats = dailyStats.find(s => s.date === today);
 
   return (

@@ -6,27 +6,31 @@ const STORAGE_KEY = "life_management_data";
 export class LifeManagementService {
   
   static getData(): LifeManagementData {
-    const data = usGetItem(STORAGE_KEY);
-    if (data) {
-      const parsed = JSON.parse(data);
-      // Ensure new fields exist
-      return {
-        subscriptions: parsed.subscriptions || [],
-        emis: parsed.emis || [],
-        insurances: parsed.insurances || [],
-        bills: parsed.bills || [],
-        peopleMoney: parsed.peopleMoney || [],
-        tasks: parsed.tasks || [],
-        meetings: parsed.meetings || [],
-        habits: parsed.habits || [],
-        reminders: parsed.reminders || [],
-        savingsPlans: parsed.savingsPlans || [],
-        savingsItems: parsed.savingsItems || [],
-        investments: parsed.investments || [],
-        creditCards: parsed.creditCards || [],
-        budgets: parsed.budgets || [],
-        transactions: parsed.transactions || []
-      };
+    try {
+      const data = usGetItem(STORAGE_KEY);
+      if (data) {
+        const parsed = JSON.parse(data);
+        // Ensure new fields exist even if older blobs are partial
+        return {
+          subscriptions: Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [],
+          emis: Array.isArray(parsed?.emis) ? parsed.emis : [],
+          insurances: Array.isArray(parsed?.insurances) ? parsed.insurances : [],
+          bills: Array.isArray(parsed?.bills) ? parsed.bills : [],
+          peopleMoney: Array.isArray(parsed?.peopleMoney) ? parsed.peopleMoney : [],
+          tasks: Array.isArray(parsed?.tasks) ? parsed.tasks : [],
+          meetings: Array.isArray(parsed?.meetings) ? parsed.meetings : [],
+          habits: Array.isArray(parsed?.habits) ? parsed.habits : [],
+          reminders: Array.isArray(parsed?.reminders) ? parsed.reminders : [],
+          savingsPlans: Array.isArray(parsed?.savingsPlans) ? parsed.savingsPlans : [],
+          savingsItems: Array.isArray(parsed?.savingsItems) ? parsed.savingsItems : [],
+          investments: Array.isArray(parsed?.investments) ? parsed.investments : [],
+          creditCards: Array.isArray(parsed?.creditCards) ? parsed.creditCards : [],
+          budgets: Array.isArray(parsed?.budgets) ? parsed.budgets : [],
+          transactions: Array.isArray(parsed?.transactions) ? parsed.transactions : [],
+        };
+      }
+    } catch {
+      /* corrupt storage — return empty */
     }
     return {
       subscriptions: [],
@@ -43,7 +47,7 @@ export class LifeManagementService {
       investments: [],
       creditCards: [],
       budgets: [],
-      transactions: []
+      transactions: [],
     };
   }
 

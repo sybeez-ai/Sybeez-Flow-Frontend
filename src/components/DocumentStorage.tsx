@@ -53,6 +53,8 @@ import {
   DocFolder,
   DocMeta,
 } from "@/services/documentService";
+import { USER_SCOPE_CHANGED_EVENT } from "@/services/persistSync";
+import { useAuth } from "@/contexts/AuthContext";
 
 type SortKey = "recent" | "name" | "size";
 
@@ -73,6 +75,7 @@ const iconForType = (type: string, name: string) => {
 };
 
 const DocumentStorage = ({ onClose }: DocumentStorageProps) => {
+  const { user } = useAuth();
   const [folders, setFolders] = useState<DocFolder[]>([]);
   const [docs, setDocs] = useState<DocMeta[]>([]);
   const [activeFolder, setActiveFolder] = useState<string | null | "all">("all");
@@ -81,6 +84,7 @@ const DocumentStorage = ({ onClose }: DocumentStorageProps) => {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [cloudError, setCloudError] = useState<string | null>(null);
 
   // Folder create dialog
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
@@ -107,17 +111,48 @@ const DocumentStorage = ({ onClose }: DocumentStorageProps) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const [f, d] = await Promise.all([
-      documentService.listFolders(),
-      documentService.listDocuments(),
-    ]);
-    setFolders(f);
-    setDocs(d);
-    setLoading(false);
+    setLoading(true);
+    setCloudError(null);
+    try {
+      await documentService.cloudStatus();
+      const [f, d] = await Promise.all([
+        documentService.listFolders(),
+        documentService.listDocuments(),
+      ]);
+      setFolders(f);
+      setDocs(d);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not load cloud documents";
+      setCloudError(msg);
+      setFolders([]);
+      setDocs([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  // Per-user vault: reload empty/clean when account changes
   useEffect(() => {
-    refresh();
+    setActiveFolder("all");
+    setSearch("");
+    setFolders([]);
+    setDocs([]);
+    setPreview((prev) => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+    void refresh();
+  }, [user?.id, refresh]);
+
+  useEffect(() => {
+    const onScope = () => {
+      setActiveFolder("all");
+      setFolders([]);
+      setDocs([]);
+      void refresh();
+    };
+    window.addEventListener(USER_SCOPE_CHANGED_EVENT, onScope);
+    return () => window.removeEventListener(USER_SCOPE_CHANGED_EVENT, onScope);
   }, [refresh]);
 
   const uploadFiles = useCallback(
@@ -134,7 +169,8 @@ const DocumentStorage = ({ onClose }: DocumentStorageProps) => {
             : `Uploaded ${list.length} files`
         );
       } catch (e) {
-        toast.error("Upload failed — the file may be too large.");
+        const msg = e instanceof Error ? e.message : "Upload failed";
+        toast.error(msg);
       }
     },
     [activeFolder, refresh]
@@ -411,6 +447,18 @@ const DocumentStorage = ({ onClose }: DocumentStorageProps) => {
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
         >
+          {cloudError ? (
+            <div className="mx-5 mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              Cloud storage error: {cloudError}
+              <button
+                type="button"
+                className="ml-2 underline"
+                onClick={() => void refresh()}
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
           {/* Toolbar */}
           <div className="flex flex-none items-center gap-3 px-5 py-3">
             <div className="relative flex-1 max-w-md">

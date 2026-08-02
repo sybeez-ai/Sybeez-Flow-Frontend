@@ -3,7 +3,9 @@
  * Handles voice recording, streaming to backend, and playing responses
  */
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+import { getApiBase } from "@/services/apiBase";
+
+const BACKEND_URL = getApiBase();
 
 export class VoiceService {
   private mediaRecorder: MediaRecorder | null = null;

@@ -3,14 +3,18 @@
  * Connects to FastAPI backend for photorealistic 3D human generation
  */
 
-const AVATAR_API_BASE = import.meta.env.VITE_AVATAR_API_URL || 'http://localhost:8000/api/v1/avatar';
+import { getApiBase } from "@/services/apiBase";
+
+const AVATAR_API_BASE =
+  (import.meta.env.VITE_AVATAR_API_URL as string | undefined)?.replace(/\/$/, "") ||
+  `${getApiBase()}/api/v1/avatar`;
 
 /**
  * If a GLB URL is external (e.g. Tripo CDN), route it through the backend proxy
  * to avoid CORS issues when loading in Three.js GLTFLoader.
  */
 function toProxiedGlbUrl(url: string): string {
-  if (!url.startsWith('http://localhost') && !url.startsWith('/')) {
+  if (!url.startsWith("http://localhost") && !url.startsWith("https://localhost") && !url.startsWith("/")) {
     return `${AVATAR_API_BASE}/proxy-glb?url=${encodeURIComponent(url)}`;
   }
   return url;

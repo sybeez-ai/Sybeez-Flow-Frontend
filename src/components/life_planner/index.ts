@@ -12,4 +12,5 @@ export { default as GoalTracker } from './GoalTracker';
 export { default as MoodTracker } from './MoodTracker';
 export { default as DailyJournal } from './DailyJournal';
 export { default as WeeklyReview } from './WeeklyReview';
+export { default as PlannerReports } from './PlannerReports';
 export { default as DataSync } from './DataSync';

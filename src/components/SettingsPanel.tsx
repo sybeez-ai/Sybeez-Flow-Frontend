@@ -1,11 +1,22 @@
 import { usGetItem, usSetItem } from "@/services/userStorage";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { X, Check, LogOut } from "lucide-react";
+import { X, Check, LogOut, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import FeedbackSection from "@/components/FeedbackSection";
 import { CURRENCIES } from "@/services/currencyService";
@@ -99,7 +110,8 @@ const SettingsPanel = ({
   inline = false,
 }: SettingsPanelProps) => {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user, signOut, deleteAccount } = useAuth();
+  const [deleting, setDeleting] = useState(false);
   const [settings, setSettings] = useState<ProfileSettings>(defaultProfile);
   const [hasChanges, setHasChanges] = useState(false);
 
@@ -303,16 +315,60 @@ const SettingsPanel = ({
         <h3 className="text-sm font-semibold uppercase tracking-wider text-red-500">
           Danger Zone
         </h3>
-        <div className="flex items-center justify-between p-4 border border-red-500/20 rounded-xl bg-red-500/5">
-          <div>
+        <div className="flex items-center justify-between gap-4 p-4 border border-red-500/20 rounded-xl bg-red-500/5">
+          <div className="min-w-0">
             <div className="font-medium text-red-500">Delete Account</div>
             <div className="text-sm text-muted-foreground">
-              Permanently delete your account and all data
+              Permanently removes your account from our servers. You must Sign up again to return.
             </div>
           </div>
-          <Button variant="destructive" size="sm">
-            Delete Account
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="sm" disabled={deleting}>
+                {deleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Deleting…
+                  </>
+                ) : (
+                  "Delete Account"
+                )}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This removes your Sybeez Flow account and all synced data, chats, and documents.
+                  This cannot be undone. Sign in will no longer work for this email — use Sign up
+                  to create a new account (you will receive a welcome email).
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  disabled={deleting}
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    setDeleting(true);
+                    try {
+                      await deleteAccount();
+                      toast.success("Account deleted. Sign up again to create a new workspace.");
+                      navigate("/signup", { replace: true });
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error ? err.message : "Could not delete account",
+                      );
+                      setDeleting(false);
+                    }
+                  }}
+                >
+                  {deleting ? "Deleting…" : "Yes, delete forever"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
     </div>

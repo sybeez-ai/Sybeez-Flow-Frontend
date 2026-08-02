@@ -6,10 +6,7 @@
 import { authHeaders } from "@/services/userStorage";
 import { getApiBase } from "@/services/apiBase";
 
-const API_URL = (import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || "http://localhost:8000").replace(
-  /\/$/,
-  "",
-);
+const API_URL = getApiBase();
 
 export interface GmailEmail {
   id: string;

@@ -38,6 +38,12 @@ export const USER_DATA_BASE_KEYS = [
   "calendar_events",
   "mood_entries",
   "journal_entries",
+  "productivity_habits",
+  "productivity_goals",
+  "pomodoro_sessions",
+  "pomodoro_settings",
+  "daily_stats",
+  "productivity_last_backup",
 ] as const;
 
 const AUTH_USER_KEY = "sybeez_auth_user";
@@ -59,7 +65,23 @@ export function userScopedKey(baseKey: string, userId?: string | null): string {
   return `u:${uid}:${baseKey}`;
 }
 
-/** Read user-scoped value; one-time migrate from legacy global key if needed. */
+/** True if some other account already has a scoped copy of this key. */
+function otherUserHasScopedKey(baseKey: string): boolean {
+  const mine = userScopedKey(baseKey);
+  const suffix = `:${baseKey}`;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || k === mine) continue;
+      if (k.startsWith("u:") && k.endsWith(suffix)) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/** Read user-scoped value; carefully migrate legacy global keys once. */
 export function usGetItem(baseKey: string): string | null {
   try {
     const scoped = userScopedKey(baseKey);
@@ -72,7 +94,18 @@ export function usGetItem(baseKey: string): string | null {
     const legacy = localStorage.getItem(baseKey);
     if (legacy == null) return null;
 
-    // Claim legacy data for the first authenticated user on this browser
+    // Never let a new account inherit leftover global data when another
+    // user on this browser already has a scoped copy.
+    if (otherUserHasScopedKey(baseKey)) {
+      try {
+        localStorage.removeItem(baseKey);
+      } catch {
+        /* ignore */
+      }
+      return null;
+    }
+
+    // First authenticated user on this browser after upgrade claims legacy once
     localStorage.setItem(scoped, legacy);
     localStorage.removeItem(baseKey);
     return legacy;
@@ -89,6 +122,33 @@ export function usRemoveItem(baseKey: string): void {
   try {
     localStorage.removeItem(userScopedKey(baseKey));
     localStorage.removeItem(baseKey); // legacy
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Wipe every local key owned by this user (scoped + tour flags).
+ * Call after account deletion or when re-login is a brand-new account.
+ */
+export function clearAllUserLocalData(userId: string): void {
+  const uid = (userId || "").trim();
+  if (!uid) return;
+  const prefix = `u:${uid}:`;
+  try {
+    const toRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k.startsWith(prefix)) toRemove.push(k);
+      if (k === `sybeez_tour_done:${uid}`) toRemove.push(k);
+    }
+    for (const k of toRemove) localStorage.removeItem(k);
+    // Known base keys (covers any missed patterns)
+    for (const base of USER_DATA_BASE_KEYS) {
+      localStorage.removeItem(userScopedKey(base, uid));
+      localStorage.removeItem(base);
+    }
   } catch {
     /* ignore */
   }

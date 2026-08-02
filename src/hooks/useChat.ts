@@ -5,6 +5,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { getApiBase } from '@/services/apiBase';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -31,7 +32,7 @@ interface UseChatOptions {
 
 export const useChat = (options: UseChatOptions = {}) => {
   const {
-    url = import.meta.env.VITE_API_URL || 'http://localhost:8000',
+    url = getApiBase(),
     sessionKey = 'main',
     onMessage,
     onError

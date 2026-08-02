@@ -408,7 +408,7 @@ export default function CommitmentsAndPeople() {
           </Button>
         </div>
         <p className="text-[11px] text-muted-foreground mt-1">
-          Rent, utilities, money to give, and money to collect — pick the type when you add.
+          Rent &amp; utilities, money to give (counts as a liability), and money to collect (counts as an asset) — all flow into Net Worth automatically.
         </p>
       </CardHeader>
       <CardContent className="pt-3 space-y-3">

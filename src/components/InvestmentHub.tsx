@@ -1,17 +1,22 @@
 /**
  * InvestmentHub
  * -------------
- * A comfortable, feature-rich investing workspace that sits inside the Finance
- * Manager. Talks to the FastAPI stock router (/api/stocks). Sections:
- *   • Holdings   — portfolio value, best/worst mover, sortable table or cards,
- *                  buy-more / reduce, per-row sparkline, detail drawer w/ chart.
- *   • Allocation — donut of current value + per-holding breakdown.
- *   • Watchlist  — track symbols you don't own yet (persisted locally).
- *   • Explore    — live symbol search + popular quick-picks.
+ * Worldwide stock tracker inside Finance Manager.
+ *   • Holdings   — live value, today's move, total P&L vs cost
+ *   • Allocation — mix by current value
+ *   • Watchlist  — symbols you don't own yet
+ *   • Explore    — search any market by name or ticker
  */
 
 import { usGetItem, usSetItem } from "@/services/userStorage";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  stocksApi,
+  type PortfolioQuotes,
+  type StockQuote,
+  type StockSearchHit,
+  type OHLCBar,
+} from "@/services/stocksApi";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   TrendingUp,
   TrendingDown,
@@ -30,6 +35,7 @@ import {
   Rows3,
   LineChart as LineChartIcon,
   Loader2,
+  Globe2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -52,9 +58,6 @@ import {
 } from "recharts";
 import { cn } from "@/lib/utils";
 
-const API =
-  (import.meta.env.VITE_API_URL || "http://localhost:8000") + "/api/stocks";
-
 const COLORS = [
   "#6366f1",
   "#22c55e",
@@ -66,67 +69,65 @@ const COLORS = [
   "#ec4899",
 ];
 
+const REGIONS = [
+  { id: "all", label: "Worldwide" },
+  { id: "US", label: "🇺🇸 US" },
+  { id: "IN", label: "🇮🇳 India" },
+  { id: "EU", label: "🇪🇺 Europe" },
+  { id: "UK", label: "🇬🇧 UK" },
+  { id: "JP", label: "🇯🇵 Japan" },
+  { id: "ETF", label: "ETFs" },
+] as const;
+
 const POPULAR = [
-  { symbol: "RELIANCE.NS", name: "Reliance", region: "🇮🇳" },
-  { symbol: "TCS.NS", name: "TCS", region: "🇮🇳" },
-  { symbol: "INFY.NS", name: "Infosys", region: "🇮🇳" },
-  { symbol: "HDFCBANK.NS", name: "HDFC Bank", region: "🇮🇳" },
-  { symbol: "AAPL", name: "Apple", region: "🇺🇸" },
-  { symbol: "MSFT", name: "Microsoft", region: "🇺🇸" },
-  { symbol: "GOOGL", name: "Alphabet", region: "🇺🇸" },
-  { symbol: "TSLA", name: "Tesla", region: "🇺🇸" },
-  { symbol: "NVDA", name: "NVIDIA", region: "🇺🇸" },
-  { symbol: "AMZN", name: "Amazon", region: "🇺🇸" },
+  { symbol: "AAPL", name: "Apple", region: "🇺🇸", market: "US" },
+  { symbol: "MSFT", name: "Microsoft", region: "🇺🇸", market: "US" },
+  { symbol: "GOOGL", name: "Alphabet", region: "🇺🇸", market: "US" },
+  { symbol: "NVDA", name: "NVIDIA", region: "🇺🇸", market: "US" },
+  { symbol: "AMZN", name: "Amazon", region: "🇺🇸", market: "US" },
+  { symbol: "TSLA", name: "Tesla", region: "🇺🇸", market: "US" },
+  { symbol: "RELIANCE.NS", name: "Reliance", region: "🇮🇳", market: "IN" },
+  { symbol: "TCS.NS", name: "TCS", region: "🇮🇳", market: "IN" },
+  { symbol: "INFY.NS", name: "Infosys", region: "🇮🇳", market: "IN" },
+  { symbol: "HDFCBANK.NS", name: "HDFC Bank", region: "🇮🇳", market: "IN" },
+  { symbol: "SAP.DE", name: "SAP", region: "🇩🇪", market: "EU" },
+  { symbol: "ASML.AS", name: "ASML", region: "🇳🇱", market: "EU" },
+  { symbol: "AIR.PA", name: "Airbus", region: "🇫🇷", market: "EU" },
+  { symbol: "MC.PA", name: "LVMH", region: "🇫🇷", market: "EU" },
+  { symbol: "BP.L", name: "BP", region: "🇬🇧", market: "UK" },
+  { symbol: "HSBA.L", name: "HSBC", region: "🇬🇧", market: "UK" },
+  { symbol: "7203.T", name: "Toyota", region: "🇯🇵", market: "JP" },
+  { symbol: "6758.T", name: "Sony", region: "🇯🇵", market: "JP" },
+  { symbol: "VOO", name: "Vanguard S&P 500", region: "ETF", market: "ETF" },
+  { symbol: "IWDA.AS", name: "iShares World", region: "ETF", market: "ETF" },
 ];
 
 const WATCHLIST_KEY = "finance_watchlist";
 
-type Quote = {
-  symbol: string;
-  name: string;
-  qty: number;
-  avg_buy_price: number;
-  price: number;
-  prev_close: number;
-  change_pct: number;
-  currency: string;
-  invested: number;
-  current_value: number;
-  pl: number;
-  pl_pct: number;
-};
-
-type Portfolio = {
-  stocks: Quote[];
-  total_invested: number;
-  total_current: number;
-  total_pl: number;
-  total_pl_pct: number;
-};
-
-type OHLC = {
-  date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
-
+type Quote = StockQuote;
+type Portfolio = PortfolioQuotes;
+type OHLC = OHLCBar;
 type WatchItem = { symbol: string; name: string };
-type SearchResult = {
-  symbol: string;
-  name: string;
-  price: number;
-  currency: string;
-  exchange?: string;
-};
+type SearchResult = StockSearchHit;
 
 type SubTab = "holdings" | "allocation" | "watchlist" | "explore";
 type SortKey = "value" | "pl_pct" | "change_pct" | "name";
 
-const CUR: Record<string, string> = { USD: "$", INR: "₹", EUR: "€", GBP: "£" };
-const sym = (c?: string) => CUR[c || "USD"] || "$";
+const CUR: Record<string, string> = {
+  USD: "$",
+  INR: "₹",
+  EUR: "€",
+  GBP: "£",
+  JPY: "¥",
+  CAD: "C$",
+  AUD: "A$",
+  CHF: "CHF ",
+  HKD: "HK$",
+  SGD: "S$",
+  KRW: "₩",
+  CNY: "¥",
+};
+const sym = (c?: string) => CUR[c || "USD"] || `${c || ""} `;
 const money = (n: number, c?: string) =>
   `${sym(c)}${Math.abs(n).toLocaleString(undefined, {
     maximumFractionDigits: 2,
@@ -139,8 +140,8 @@ function Sparkline({ symbol, positive }: { symbol: string; positive: boolean }) 
   const [pts, setPts] = useState<OHLC[]>([]);
   useEffect(() => {
     let alive = true;
-    fetch(`${API}/history/${encodeURIComponent(symbol)}?period=5d&interval=1h`)
-      .then((r) => r.json())
+    stocksApi
+      .history(symbol, "5d", "1h")
       .then((d) => alive && Array.isArray(d) && setPts(d))
       .catch(() => {});
     return () => {
@@ -190,16 +191,22 @@ const InvestmentHub = () => {
   const [addQty, setAddQty] = useState("");
   const [addPrice, setAddPrice] = useState("");
   const [addBusy, setAddBusy] = useState(false);
+  const [addHits, setAddHits] = useState<SearchResult[]>([]);
+  const [addSearching, setAddSearching] = useState(false);
 
   const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
-  const [watchQuotes, setWatchQuotes] = useState<Record<string, SearchResult>>({});
+  const [watchQuotes, setWatchQuotes] = useState<
+    Record<string, SearchResult & { change_pct?: number; price?: number }>
+  >({});
 
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
-  const [searchRes, setSearchRes] = useState<SearchResult | null>(null);
+  const [searchHits, setSearchHits] = useState<SearchResult[]>([]);
+  const [regionFilter, setRegionFilter] = useState<(typeof REGIONS)[number]["id"]>("all");
 
   // trade drawer inputs
   const [tradeQty, setTradeQty] = useState("");
+  const addSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stocks = useMemo(() => portfolio?.stocks ?? [], [portfolio]);
 
@@ -207,9 +214,8 @@ const InvestmentHub = () => {
   const fetchPortfolio = useCallback(async (): Promise<Portfolio | null> => {
     setLoading(true);
     try {
-      const r = await fetch(`${API}/quotes`);
-      const d = await r.json();
-      if (d && d.stocks) {
+      const d = await stocksApi.quotes();
+      if (d && Array.isArray(d.stocks)) {
         setPortfolio(d);
         return d;
       }
@@ -219,9 +225,12 @@ const InvestmentHub = () => {
         total_current: 0,
         total_pl: 0,
         total_pl_pct: 0,
+        day_pl: 0,
+        day_pl_pct: 0,
       });
       return null;
-    } catch {
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not load portfolio");
       return null;
     } finally {
       setLoading(false);
@@ -232,10 +241,7 @@ const InvestmentHub = () => {
     setChartLoad(true);
     try {
       const interval = period === "1d" ? "5m" : period === "5d" ? "1h" : "1d";
-      const r = await fetch(
-        `${API}/history/${encodeURIComponent(s)}?period=${period}&interval=${interval}`
-      );
-      const d = await r.json();
+      const d = await stocksApi.history(s, period, interval);
       setChart(Array.isArray(d) ? d : []);
     } catch {
       setChart([]);
@@ -258,7 +264,7 @@ const InvestmentHub = () => {
   // ── watchlist ────────────────────────────────────────────────────
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(WATCHLIST_KEY);
+      const raw = usGetItem(WATCHLIST_KEY) || localStorage.getItem(WATCHLIST_KEY);
       if (raw) setWatchlist(JSON.parse(raw));
     } catch {
       /* ignore */
@@ -267,26 +273,23 @@ const InvestmentHub = () => {
 
   const persistWatch = useCallback((list: WatchItem[]) => {
     setWatchlist(list);
-    localStorage.setItem(WATCHLIST_KEY, JSON.stringify(list));
+    usSetItem(WATCHLIST_KEY, JSON.stringify(list));
   }, []);
 
   const refreshWatchQuotes = useCallback(async (list: WatchItem[]) => {
     const entries = await Promise.all(
       list.map(async (w) => {
         try {
-          const r = await fetch(
-            `${API}/quotes/single?symbol=${encodeURIComponent(w.symbol)}`
-          );
-          const d = await r.json();
+          const d = await stocksApi.singleQuote(w.symbol);
           return [w.symbol, { ...d, name: w.name }] as const;
         } catch {
           return [w.symbol, null] as const;
         }
       })
     );
-    const map: Record<string, SearchResult> = {};
+    const map: Record<string, SearchResult & { change_pct?: number; price?: number }> = {};
     entries.forEach(([s, d]) => {
-      if (d) map[s] = d as SearchResult;
+      if (d) map[s] = d;
     });
     setWatchQuotes(map);
   }, []);
@@ -311,37 +314,65 @@ const InvestmentHub = () => {
 
   // ── search / add ─────────────────────────────────────────────────
   const runSearch = async (q: string) => {
-    const s = q.trim().toUpperCase();
+    const s = q.trim();
     if (!s) return;
     setSearching(true);
-    setSearchRes(null);
+    setSearchHits([]);
     try {
-      const r = await fetch(`${API}/search?q=${encodeURIComponent(s)}`);
-      if (!r.ok) throw new Error("not found");
-      setSearchRes(await r.json());
+      const d = await stocksApi.search(s, 12);
+      const hits = d.results?.length ? d.results : [d];
+      setSearchHits(hits.filter((h) => h?.symbol));
+      if (!hits.length) toast.error(`No results for “${s}”`);
     } catch {
-      toast.error(`No results for “${s}”`);
+      toast.error(`No results for “${s}” — try company name or ticker (AAPL, SAP.DE, TCS.NS)`);
     } finally {
       setSearching(false);
     }
   };
 
-  const lookupForAdd = async () => {
-    const s = addSym.trim().toUpperCase();
-    if (!s) return;
-    setAddBusy(true);
+  const selectAddHit = (hit: SearchResult) => {
+    setAddSym(hit.symbol);
+    setAddName(hit.name || hit.symbol);
+    if (hit.price) setAddPrice(String(hit.price));
+    setAddHits([]);
+  };
+
+  const lookupForAdd = async (raw?: string) => {
+    const s = (raw ?? addSym).trim();
+    if (s.length < 1) return;
+    setAddSearching(true);
     try {
-      const r = await fetch(`${API}/search?q=${encodeURIComponent(s)}`);
-      if (!r.ok) throw new Error();
-      const d = await r.json();
-      setAddName(d.name || s);
-      if (d.price) setAddPrice(String(d.price));
+      const d = await stocksApi.search(s, 10);
+      const hits = (d.results?.length ? d.results : [d]).filter((h) => h?.symbol);
+      setAddHits(hits);
+      if (hits[0]) {
+        setAddName(hits[0].name || hits[0].symbol);
+        if (hits[0].price) setAddPrice(String(hits[0].price));
+      }
     } catch {
-      toast.error("Symbol not found");
+      setAddHits([]);
+      toast.error("No matching stocks found");
     } finally {
-      setAddBusy(false);
+      setAddSearching(false);
     }
   };
+
+  useEffect(() => {
+    if (!showAdd) return;
+    const s = addSym.trim();
+    if (s.length < 2) {
+      setAddHits([]);
+      return;
+    }
+    if (addSearchTimer.current) clearTimeout(addSearchTimer.current);
+    addSearchTimer.current = setTimeout(() => {
+      void lookupForAdd(s);
+    }, 350);
+    return () => {
+      if (addSearchTimer.current) clearTimeout(addSearchTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addSym, showAdd]);
 
   const postHolding = async (
     symbol: string,
@@ -349,18 +380,13 @@ const InvestmentHub = () => {
     qty: number,
     avg: number
   ) => {
-    const r = await fetch(`${API}/portfolio/add`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, name, qty, avg_buy_price: avg }),
-    });
-    if (!r.ok) throw new Error(await r.text().catch(() => "Unable to save"));
+    await stocksApi.addHolding({ symbol, name, qty, avg_buy_price: avg });
   };
 
   const addStock = async (prefill?: { symbol: string; name: string; price?: number }) => {
     const symbol = (prefill?.symbol || addSym).trim().toUpperCase();
     if (!symbol) {
-      toast.error("Enter a stock symbol");
+      toast.error("Search a company or ticker first");
       return;
     }
     setAddBusy(true);
@@ -370,14 +396,13 @@ const InvestmentHub = () => {
       let avg = Number(prefill?.price ?? addPrice);
       if (!Number.isFinite(qty) || qty <= 0) qty = 1;
       if (!name || !Number.isFinite(avg) || avg <= 0) {
-        const r = await fetch(`${API}/search?q=${encodeURIComponent(symbol)}`);
-        if (!r.ok) throw new Error("Symbol not found");
-        const d = await r.json();
-        name = name || d.name || symbol;
-        avg = Number(d.price || 0) || avg;
+        const d = await stocksApi.search(symbol, 5);
+        const hit = d.results?.[0] || d;
+        name = name || hit.name || symbol;
+        avg = Number(hit.price || 0) || avg;
       }
       if (!Number.isFinite(avg) || avg <= 0)
-        throw new Error("Unable to resolve a price for this symbol");
+        throw new Error("Unable to resolve a live price — enter avg buy price manually");
       await postHolding(symbol, name || symbol, qty, avg);
       toast.success(`${symbol} added to portfolio`);
       setShowAdd(false);
@@ -385,6 +410,7 @@ const InvestmentHub = () => {
       setAddName("");
       setAddQty("");
       setAddPrice("");
+      setAddHits([]);
       const updated = await fetchPortfolio();
       const added = updated?.stocks.find((s) => s.symbol.toUpperCase() === symbol);
       if (added) {
@@ -399,10 +425,14 @@ const InvestmentHub = () => {
   };
 
   const removeStock = async (symbol: string) => {
-    await fetch(`${API}/portfolio/${symbol}`, { method: "DELETE" });
-    toast.success(`${symbol} removed`);
-    if (selected?.symbol === symbol) setSelected(null);
-    fetchPortfolio();
+    try {
+      await stocksApi.removeHolding(symbol);
+      toast.success(`${symbol} removed`);
+      if (selected?.symbol === symbol) setSelected(null);
+      fetchPortfolio();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Remove failed");
+    }
   };
 
   // Buy more / reduce from the detail drawer
@@ -462,16 +492,24 @@ const InvestmentHub = () => {
     return arr;
   }, [stocks, sortKey]);
 
-  const dayChange = useMemo(
+  const dayChange = portfolio?.day_pl ?? 0;
+  const dayChangePct = portfolio?.day_pl_pct ?? 0;
+
+  const todayBest = useMemo(
     () =>
-      stocks.reduce((sum, s) => sum + (s.price - s.prev_close) * s.qty, 0),
+      stocks.length
+        ? stocks.reduce((a, b) => (b.change_pct > a.change_pct ? b : a))
+        : null,
     [stocks]
   );
-  const dayChangePct = useMemo(() => {
-    const prevValue = stocks.reduce((sum, s) => sum + s.prev_close * s.qty, 0);
-    return prevValue ? (dayChange / prevValue) * 100 : 0;
-  }, [stocks, dayChange]);
-
+  const todayWorst = useMemo(
+    () =>
+      stocks.length
+        ? stocks.reduce((a, b) => (b.change_pct < a.change_pct ? b : a))
+        : null,
+    [stocks]
+  );
+  // Keep best/worst aliases for existing mover pills (all-time P&L)
   const best = useMemo(
     () =>
       stocks.length
@@ -487,70 +525,132 @@ const InvestmentHub = () => {
     [stocks]
   );
 
-  const cur = stocks[0]?.currency || "USD";
+  const cur = portfolio?.currency || stocks[0]?.currency || "USD";
   const plUp = (portfolio?.total_pl ?? 0) >= 0;
+  const dayUp = dayChange >= 0;
+  const popularFiltered = useMemo(
+    () =>
+      regionFilter === "all"
+        ? POPULAR
+        : POPULAR.filter((p) => p.market === regionFilter),
+    [regionFilter]
+  );
 
   // ── render helpers ───────────────────────────────────────────────
   const SummaryHero = () => (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Card className="col-span-2 border-border bg-gradient-to-br from-primary/10 to-transparent lg:col-span-1">
-        <CardContent className="p-4">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Wallet className="h-3.5 w-3.5" /> Portfolio Value
-          </div>
-          <p className="mt-1 text-2xl font-bold">
-            {money(portfolio?.total_current ?? 0, cur)}
-          </p>
-          <p
-            className={cn(
-              "mt-0.5 flex items-center gap-1 text-xs font-medium",
-              dayChange >= 0 ? "text-green-500" : "text-red-500"
-            )}
-          >
-            {dayChange >= 0 ? (
-              <ArrowUpRight className="h-3.5 w-3.5" />
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="col-span-2 border-border bg-gradient-to-br from-primary/10 to-transparent lg:col-span-1">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Wallet className="h-3.5 w-3.5" /> Now worth
+            </div>
+            <p className="mt-1 text-2xl font-bold">
+              {money(portfolio?.total_current ?? 0, cur)}
+            </p>
+            <p
+              className={cn(
+                "mt-0.5 flex items-center gap-1 text-xs font-medium",
+                dayUp ? "text-green-500" : "text-red-500"
+              )}
+            >
+              {dayUp ? (
+                <ArrowUpRight className="h-3.5 w-3.5" />
+              ) : (
+                <ArrowDownRight className="h-3.5 w-3.5" />
+              )}
+              {signed(dayChange, cur)} ({pct(dayChangePct)}) today
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">Today’s move</p>
+            <p className={cn("mt-1 text-xl font-bold", dayUp ? "text-green-500" : "text-red-500")}>
+              {signed(dayChange, cur)}
+            </p>
+            <p className={cn("text-xs font-medium", dayUp ? "text-green-500" : "text-red-500")}>
+              {pct(dayChangePct)} vs yesterday close
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">All-time P&L</p>
+            <p className={cn("mt-1 text-xl font-bold", plUp ? "text-green-500" : "text-red-500")}>
+              {signed(portfolio?.total_pl ?? 0, cur)}
+            </p>
+            <p className={cn("text-xs font-medium", plUp ? "text-green-500" : "text-red-500")}>
+              {pct(portfolio?.total_pl_pct ?? 0)} vs what you paid
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">Today’s top mover</p>
+            {todayBest ? (
+              <>
+                <p className="mt-1 truncate text-sm font-bold">{todayBest.symbol}</p>
+                <p
+                  className={cn(
+                    "text-xs font-medium",
+                    todayBest.change_pct >= 0 ? "text-green-500" : "text-red-500"
+                  )}
+                >
+                  {pct(todayBest.change_pct)} · {money(todayBest.price, todayBest.currency)}
+                </p>
+              </>
             ) : (
-              <ArrowDownRight className="h-3.5 w-3.5" />
+              <p className="mt-1 text-sm text-muted-foreground">Add stocks to track</p>
             )}
-            {signed(dayChange, cur)} ({pct(dayChangePct)}) today
-          </p>
-        </CardContent>
-      </Card>
-      <Card className="border-border">
-        <CardContent className="p-4">
-          <p className="text-xs text-muted-foreground">Total P&L</p>
-          <p className={cn("mt-1 text-xl font-bold", plUp ? "text-green-500" : "text-red-500")}>
-            {signed(portfolio?.total_pl ?? 0, cur)}
-          </p>
-          <p className={cn("text-xs font-medium", plUp ? "text-green-500" : "text-red-500")}>
-            {pct(portfolio?.total_pl_pct ?? 0)}
-          </p>
-        </CardContent>
-      </Card>
-      <Card className="border-border">
-        <CardContent className="p-4">
-          <p className="text-xs text-muted-foreground">Invested</p>
-          <p className="mt-1 text-xl font-bold">
-            {money(portfolio?.total_invested ?? 0, cur)}
-          </p>
-          <p className="text-xs text-muted-foreground">{stocks.length} holdings</p>
-        </CardContent>
-      </Card>
-      <Card className="border-border">
-        <CardContent className="p-4">
-          <p className="text-xs text-muted-foreground">Top Mover</p>
-          {best ? (
-            <>
-              <p className="mt-1 truncate text-sm font-bold">{best.symbol}</p>
-              <p className={cn("text-xs font-medium", best.pl_pct >= 0 ? "text-green-500" : "text-red-500")}>
-                {pct(best.pl_pct)}
-              </p>
-            </>
-          ) : (
-            <p className="mt-1 text-sm text-muted-foreground">—</p>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
+      {portfolio?.mixed_currency && portfolio.by_currency && (
+        <div className="rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Multi-currency portfolio. </span>
+          Totals above use {cur}. Other currencies:{" "}
+          {Object.entries(portfolio.by_currency)
+            .filter(([c]) => c !== cur)
+            .map(
+              ([c, b]) =>
+                `${c} ${money(b.current, c)} today ${signed(b.day_pl, c)} (${pct(b.day_pl_pct)})`
+            )
+            .join(" · ")}
+        </div>
+      )}
+      {stocks.length > 0 && todayBest && todayWorst && todayBest.symbol !== todayWorst.symbol && (
+        <div className="grid grid-cols-2 gap-3">
+          <Card className="border-border">
+            <CardContent className="flex items-center gap-2 p-3">
+              <TrendingUp className="h-4 w-4 text-green-500" />
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Best today
+                </p>
+                <p className="truncate text-sm font-semibold">
+                  {todayBest.symbol}{" "}
+                  <span className="text-green-500">{pct(todayBest.change_pct)}</span>
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-border">
+            <CardContent className="flex items-center gap-2 p-3">
+              <TrendingDown className="h-4 w-4 text-red-500" />
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Weakest today
+                </p>
+                <p className="truncate text-sm font-semibold">
+                  {todayWorst.symbol}{" "}
+                  <span className="text-red-500">{pct(todayWorst.change_pct)}</span>
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 
@@ -868,9 +968,19 @@ const InvestmentHub = () => {
                           <p className="truncate text-xs text-muted-foreground">{w.name}</p>
                         </div>
                         <div className="flex items-center gap-3">
-                          {q ? (
+                          {q?.price != null ? (
                             <div className="text-right">
                               <p className="font-medium">{money(q.price, q.currency)}</p>
+                              {typeof q.change_pct === "number" && (
+                                <p
+                                  className={cn(
+                                    "text-xs font-medium",
+                                    q.change_pct >= 0 ? "text-green-500" : "text-red-500"
+                                  )}
+                                >
+                                  {pct(q.change_pct)} today
+                                </p>
+                              )}
                             </div>
                           ) : (
                             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -905,14 +1015,22 @@ const InvestmentHub = () => {
           {/* ── EXPLORE ──────────────────────────────────────────── */}
           {tab === "explore" && (
             <div className="space-y-4">
+              <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                  <Globe2 className="h-3.5 w-3.5" /> Worldwide markets
+                </span>
+                <p className="mt-1">
+                  Search by company name or ticker — US, India, Europe, UK, Japan, ETFs, and more.
+                </p>
+              </div>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     value={query}
-                    onChange={(e) => setQuery(e.target.value.toUpperCase())}
+                    onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && runSearch(query)}
-                    placeholder="Search a symbol e.g. AAPL, TCS.NS"
+                    placeholder="Search Apple, Reliance, SAP, Toyota…"
                     className="pl-9"
                   />
                 </div>
@@ -921,50 +1039,83 @@ const InvestmentHub = () => {
                 </Button>
               </div>
 
-              {searchRes && (
-                <Card className="border-border">
-                  <CardContent className="flex items-center justify-between gap-3 p-4">
-                    <div className="min-w-0">
-                      <p className="font-bold">{searchRes.symbol}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {searchRes.name}
-                        {searchRes.exchange ? ` · ${searchRes.exchange}` : ""}
-                      </p>
-                      <p className="mt-1 text-lg font-semibold">
-                        {money(searchRes.price, searchRes.currency)}
-                      </p>
-                    </div>
-                    <div className="flex flex-none gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => addToWatch(searchRes.symbol, searchRes.name)}
-                      >
-                        <Star className="mr-1 h-4 w-4" /> Watch
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          addStock({
-                            symbol: searchRes.symbol,
-                            name: searchRes.name,
-                            price: searchRes.price,
-                          })
-                        }
-                      >
-                        <Plus className="mr-1 h-4 w-4" /> Buy
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
+              {searchHits.length > 0 && (
+                <div className="space-y-2">
+                  {searchHits.map((hit) => (
+                    <Card key={`${hit.symbol}-${hit.exchange || ""}`} className="border-border">
+                      <CardContent className="flex items-center justify-between gap-3 p-3.5">
+                        <div className="min-w-0">
+                          <p className="font-bold">{hit.symbol}</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {hit.name}
+                            {hit.exchange ? ` · ${hit.exchange}` : ""}
+                            {hit.type ? ` · ${hit.type}` : ""}
+                          </p>
+                          {hit.price != null && hit.price > 0 && (
+                            <p className="mt-1 text-sm font-semibold">
+                              {money(hit.price, hit.currency)}
+                              {typeof hit.change_pct === "number" && (
+                                <span
+                                  className={cn(
+                                    "ml-2 text-xs",
+                                    hit.change_pct >= 0 ? "text-green-500" : "text-red-500"
+                                  )}
+                                >
+                                  {pct(hit.change_pct)}
+                                </span>
+                              )}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex flex-none gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => addToWatch(hit.symbol, hit.name)}
+                          >
+                            <Star className="mr-1 h-4 w-4" /> Watch
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              addStock({
+                                symbol: hit.symbol,
+                                name: hit.name,
+                                price: hit.price,
+                              })
+                            }
+                          >
+                            <Plus className="mr-1 h-4 w-4" /> Add
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
               )}
 
               <div>
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {REGIONS.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => setRegionFilter(r.id)}
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                        regionFilter === r.id
+                          ? "border-foreground/30 bg-foreground text-background"
+                          : "border-border text-muted-foreground hover:bg-muted"
+                      )}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
                 <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  Popular
+                  Popular picks
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {POPULAR.map((p) => (
+                  {popularFiltered.map((p) => (
                     <button
                       key={p.symbol}
                       onClick={() => {
@@ -973,7 +1124,7 @@ const InvestmentHub = () => {
                       }}
                       className="rounded-full border border-border px-3 py-1.5 text-xs transition-colors hover:bg-muted"
                     >
-                      {p.region} {p.symbol}
+                      {p.region} {p.name}
                     </button>
                   ))}
                 </div>
@@ -990,43 +1141,78 @@ const InvestmentHub = () => {
           onClick={() => setShowAdd(false)}
         >
           <div
-            className="w-full max-w-sm space-y-3 rounded-2xl border border-border bg-card p-5 shadow-2xl"
+            className="w-full max-w-md space-y-3 rounded-2xl border border-border bg-card p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Add to Portfolio</h3>
+              <div>
+                <h3 className="font-semibold">Add a stock</h3>
+                <p className="text-[11px] text-muted-foreground">
+                  Search any worldwide company or ticker
+                </p>
+              </div>
               <button onClick={() => setShowAdd(false)}>
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="flex flex-wrap gap-1">
-              {POPULAR.slice(0, 6).map((p) => (
+              {POPULAR.slice(0, 8).map((p) => (
                 <button
                   key={p.symbol}
                   className="rounded-full bg-muted px-2 py-1 text-[10px] transition-colors hover:bg-accent"
-                  onClick={() => {
-                    setAddSym(p.symbol);
-                    setAddName(p.name);
-                  }}
+                  onClick={() => selectAddHit({ symbol: p.symbol, name: p.name })}
                 >
-                  {p.region} {p.symbol}
+                  {p.region} {p.name}
                 </button>
               ))}
             </div>
-            <div className="flex gap-2">
-              <Input
-                placeholder="Symbol e.g. AAPL"
-                value={addSym}
-                onChange={(e) => setAddSym(e.target.value.toUpperCase())}
-                className="flex-1"
-              />
-              <Button size="sm" variant="outline" onClick={lookupForAdd} disabled={addBusy}>
-                {addBusy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <LineChartIcon className="h-4 w-4" />
-                )}
-              </Button>
+            <div className="relative">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Type Apple, Reliance, SAP.DE…"
+                  value={addSym}
+                  onChange={(e) => setAddSym(e.target.value)}
+                  className="flex-1"
+                  autoFocus
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => lookupForAdd()}
+                  disabled={addBusy || addSearching}
+                >
+                  {addSearching ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Search className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              {addHits.length > 0 && (
+                <div className="absolute left-0 right-0 z-10 mt-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-card shadow-xl">
+                  {addHits.map((hit) => (
+                    <button
+                      key={`${hit.symbol}-${hit.exchange || ""}`}
+                      type="button"
+                      className="flex w-full items-start justify-between gap-2 border-b border-border/50 px-3 py-2 text-left last:border-0 hover:bg-muted/60"
+                      onClick={() => selectAddHit(hit)}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold">{hit.symbol}</p>
+                        <p className="truncate text-[11px] text-muted-foreground">
+                          {hit.name}
+                          {hit.exchange ? ` · ${hit.exchange}` : ""}
+                        </p>
+                      </div>
+                      {hit.price != null && hit.price > 0 && (
+                        <span className="flex-none text-xs text-muted-foreground">
+                          {money(hit.price, hit.currency)}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <Input
               placeholder="Company name"
@@ -1035,7 +1221,7 @@ const InvestmentHub = () => {
             />
             <div className="flex gap-2">
               <Input
-                placeholder="Qty"
+                placeholder="Shares (qty)"
                 type="number"
                 value={addQty}
                 onChange={(e) => setAddQty(e.target.value)}
@@ -1049,6 +1235,9 @@ const InvestmentHub = () => {
                 className="flex-1"
               />
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              Tip: leave price blank to use today’s live market price.
+            </p>
             <Button className="w-full" onClick={() => addStock()} disabled={addBusy}>
               {addBusy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
               Add to Portfolio
@@ -1096,6 +1285,11 @@ const InvestmentHub = () => {
                     l: "P&L %",
                     v: pct(selected.pl_pct),
                     c: selected.pl_pct >= 0 ? "text-green-500" : "text-red-500",
+                  },
+                  {
+                    l: "Today",
+                    v: `${signed((selected.day_pl ?? (selected.price - selected.prev_close) * selected.qty), selected.currency)} (${pct(selected.change_pct)})`,
+                    c: selected.change_pct >= 0 ? "text-green-500" : "text-red-500",
                   },
                 ].map((s) => (
                   <div key={s.l} className="rounded-xl bg-muted p-3">
@@ -1248,8 +1442,10 @@ const EmptyHoldings = ({
     ) : (
       <TrendingUp className="mx-auto mb-3 h-10 w-10 opacity-30" />
     )}
-    <p className="text-sm">No holdings yet.</p>
-    <p className="text-xs">Add Indian 🇮🇳, US 🇺🇸 or EU 🇪🇺 stocks to start tracking.</p>
+    <p className="text-sm">No holdings yet</p>
+    <p className="mx-auto mt-1 max-w-xs text-xs">
+      Add stocks from anywhere — US, India, Europe, UK, Japan, ETFs — then check today’s price and performance every day.
+    </p>
     <Button size="sm" className="mt-4" onClick={onAdd}>
       <Plus className="mr-1 h-4 w-4" /> Add your first stock
     </Button>

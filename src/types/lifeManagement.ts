@@ -251,6 +251,8 @@ export interface Transaction {
   date: string;
   paymentMethod?: string;
   notes?: string;
+  /** Optional emoji / icon for In–Out list display */
+  icon?: string;
 }
 
 // Financial summary

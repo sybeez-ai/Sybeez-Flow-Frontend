@@ -123,10 +123,22 @@ export async function askAIDetailed(
   }
 
   // Keep `message` as the user's raw text so LangGraph intent routing works.
-  // System prompt + history travel in `context`.
+  // System prompt + history travel in `context`. Always stamp feature when known.
   let backendAuthFailed = false;
   let backendHttpError = "";
   try {
+    const featureHint =
+      typeof context.feature === "string" && context.feature
+        ? context.feature
+        : sessionId.includes("finance")
+          ? "finance"
+          : sessionId.includes("productivity") || sessionId.includes("planner")
+            ? "planner"
+            : sessionId.includes("gmail")
+              ? "gmail"
+              : sessionId.includes("diary")
+                ? "diary"
+                : undefined;
     const res = await fetch(`${API_URL}/api/chat`, {
       method: "POST",
       headers: authHeaders(),
@@ -134,9 +146,15 @@ export async function askAIDetailed(
       body: JSON.stringify({
         message: prompt,
         session_id: sessionId,
-        context: { ...context, system, history },
+        context: {
+          ...context,
+          ...(featureHint ? { feature: featureHint } : {}),
+          system,
+          history,
+        },
         use_voice: false,
-        use_web_search: enableWeb,
+        // Domain assistants use their own research path; don't force global web_search intent
+        use_web_search: Boolean(enableWeb && !featureHint),
       }),
     });
 

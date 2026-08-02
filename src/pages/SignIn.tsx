@@ -329,9 +329,15 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
       toast.error(message);
       if (message.toLowerCase().includes("already exists")) {
         setErrors((prev) => ({ ...prev, email: message }));
-      } else if (message.toLowerCase().includes("no account")) {
+      } else if (
+        message.toLowerCase().includes("no account") ||
+        message.toLowerCase().includes("sign up to create")
+      ) {
         setErrors((prev) => ({ ...prev, email: message }));
-      } else if (message.toLowerCase().includes("incorrect")) {
+      } else if (
+        message.toLowerCase().includes("incorrect") ||
+        message.toLowerCase().includes("password")
+      ) {
         setErrors((prev) => ({ ...prev, password: message }));
       }
     } finally {
@@ -416,8 +422,8 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
                 </h2>
                 <p className="text-sm text-muted-foreground">
                   {isSignUp
-                    ? "Set up your Sybeez Flow workspace in a minute."
-                    : "Sign in to continue to your workspace."}
+                    ? "New here? Verify your email and set up your workspace."
+                    : "Already have an account? Sign in to continue."}
                 </p>
               </div>
 
@@ -735,7 +741,7 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
                     }
                     setGoogleBusy(true);
                     try {
-                      await startCognitoGoogleLogin();
+                      await startCognitoGoogleLogin(isSignUp ? "signup" : "signin");
                     } catch (err) {
                       const message =
                         err instanceof Error ? err.message : "Google sign-in failed";
@@ -744,14 +750,14 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
                     }
                   }}
                   className="relative w-full h-11 rounded-xl border border-white/10 bg-white/[0.03] text-sm font-medium text-foreground flex items-center justify-center gap-2.5 hover:bg-white/[0.06] transition-colors disabled:opacity-50"
-                  title="Sign in with Google via Amazon Cognito"
+                  title={isSignUp ? "Sign up with Google" : "Sign in with Google"}
                 >
                   {googleBusy ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <GoogleMark />
                   )}
-                  <span>Continue with Google</span>
+                  <span>{isSignUp ? "Sign up with Google" : "Sign in with Google"}</span>
                 </button>
               ) : gisGoogleOn && googleClientId ? (
                 <div className="w-full flex justify-center [&_iframe]:!w-full">
@@ -774,8 +780,15 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
                         }
                         setGoogleBusy(true);
                         try {
-                          await signInWithGoogle(res.credential);
-                          toast.success("Signed in with Google");
+                          await signInWithGoogle(
+                            res.credential,
+                            isSignUp ? "signup" : "signin",
+                          );
+                          toast.success(
+                            isSignUp
+                              ? "Welcome to Sybeez Flow"
+                              : "Signed in with Google",
+                          );
                           navigate(from, { replace: true });
                         } catch (err) {
                           toast.error(
@@ -789,7 +802,7 @@ export default function SignIn({ mode = "signin" }: { mode?: AuthMode }) {
                       theme="filled_black"
                       shape="rectangular"
                       width="360"
-                      text="continue_with"
+                      text={isSignUp ? "signup_with" : "signin_with"}
                       useOneTap={false}
                     />
                   </GoogleOAuthProvider>

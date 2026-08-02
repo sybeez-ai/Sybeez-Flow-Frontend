@@ -82,16 +82,29 @@ export const currencyService = {
   },
 
   getBaseCurrency(): string {
-    return usGetItem(BASE_KEY) || localStorage.getItem(BASE_KEY) || "EUR";
+    // Prefer this user's preference only — never inherit another account's global key
+    const scoped = usGetItem(BASE_KEY);
+    if (scoped) return scoped;
+    // One-time migrate leftover global key into this user, then remove global
+    try {
+      const legacy = localStorage.getItem(BASE_KEY);
+      if (legacy) {
+        usSetItem(BASE_KEY, legacy);
+        localStorage.removeItem(BASE_KEY);
+        return legacy;
+      }
+    } catch {
+      /* ignore */
+    }
+    return "EUR";
   },
 
   setBaseCurrency(code: string) {
     const next = (code || "").trim().toUpperCase();
     if (!next) return;
     usSetItem(BASE_KEY, next);
-    // Keep legacy global key in sync for older readers
     try {
-      localStorage.setItem(BASE_KEY, next);
+      localStorage.removeItem(BASE_KEY); // never keep a shared global preference
     } catch {
       /* ignore */
     }

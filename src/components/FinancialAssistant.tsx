@@ -7,6 +7,7 @@
  */
 
 import { usGetItem, usSetItem } from "@/services/userStorage";
+import { getApiBase } from "@/services/apiBase";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { 
   CreditCard, PiggyBank, TrendingUp, Shield, 
@@ -27,6 +28,8 @@ import {
   BarChart, Bar, CartesianGrid, Legend
 } from "recharts";
 import { LifeManagementService } from "@/services/lifeManagement";
+import { computeFinanceRollup } from "@/services/financeRollup";
+import { computeFinancialHealthScore } from "@/services/financialHealthScore";
 import CurrencyConverter from "@/components/CurrencyConverter";
 import NetWorthTracker from "@/components/NetWorthTracker";
 import InvestmentHub from "@/components/InvestmentHub";
@@ -213,7 +216,7 @@ const FinancialAssistant = ({
   useEffect(() => {
     const connectToBackend = async () => {
       try {
-        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+        const API_URL = getApiBase();
         const response = await fetch(`${API_URL}/api/features/finance/data`, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
@@ -238,7 +241,7 @@ const FinancialAssistant = ({
     const interval = setInterval(async () => {
       if (isConnected) {
         try {
-          const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+          const API_URL = getApiBase();
           // LocalStorage is source of truth; just re-read (backend is backup)
           setRefreshKey((prev) => prev + 1);
         } catch (error) {
@@ -276,7 +279,7 @@ const FinancialAssistant = ({
   // Persist selected Finance tab (Dashboard, Daily In & Out, …)
   useEffect(() => {
     try {
-      localStorage.setItem("sybeez_finance_tab", activeViewTab);
+      usSetItem("sybeez_finance_tab", activeViewTab);
     } catch {
       /* ignore */
     }
@@ -405,60 +408,20 @@ const FinancialAssistant = ({
   // Current month key for budget tracking
   const currentMonthKey = useMemo(() => new Date().toISOString().slice(0, 7), []);
 
-  // Calculate Financial Health Score (0-100)
-  // New users with no finance activity start at 0.
-  const financialHealthScore = useMemo(() => {
-    const hasCredit = creditScores.length > 0;
-    const hasSavings =
-      data.savingsPlans.some((s) => (s.currentAmount || 0) > 0) ||
-      (data.savingsItems || []).some((s) => (s.principal || 0) > 0);
-    const hasDebts = debts.length > 0;
-    const hasIncome =
-      sideIncomes.some((s) => s.active && s.monthlyAmount > 0) ||
-      (data.transactions || []).some((t) => t.type === "income" && (Number(t.amount) || 0) > 0);
-    const hasBudgets = budgetCategories.length > 0;
-    const hasBills =
-      (data.bills || []).length > 0 ||
-      (data.emis || []).length > 0 ||
-      (data.peopleMoney || []).length > 0;
-    const hasAssets = assets.length > 0;
-
-    const hasAnyActivity =
-      hasCredit || hasSavings || hasDebts || hasIncome || hasBudgets || hasBills || hasAssets;
-
-    if (!hasAnyActivity) return 0;
-
-    let score = 50; // Baseline once the user has started using Finance
-
-    // Credit score factor (max +20)
-    const latestCredit = creditScores[creditScores.length - 1];
-    if (latestCredit) {
-      score += Math.min(20, (latestCredit.score - 500) / 20);
-    }
-
-    // Savings rate factor (max +15)
-    const savingsTotal =
-      data.savingsPlans.reduce((sum, s) => sum + (s.currentAmount || 0), 0) +
-      (data.savingsItems || []).reduce((sum, s) => sum + (s.principal || 0), 0);
-    score += Math.min(15, savingsTotal / 5000);
-
-    // Debt-to-income factor (max +15)
-    const totalDebt = debts.reduce((sum, d) => sum + d.remaining, 0);
-    const totalIncome = sideIncomes
-      .filter((s) => s.active)
-      .reduce((sum, s) => sum + s.monthlyAmount * 12, 0);
-    if (totalIncome > 0 && totalDebt < totalIncome * 0.3) {
-      score += 15;
-    } else if (totalIncome > 0 && totalDebt < totalIncome * 0.5) {
-      score += 10;
-    }
-
-    // Budget adherence factor
-    const overBudgetCount = budgetCategories.filter((b) => b.spent > b.limit).length;
-    score -= overBudgetCount * 3;
-
-    return Math.max(0, Math.min(100, Math.round(score)));
-  }, [creditScores, data, debts, sideIncomes, budgetCategories, assets]);
+  // Financial Health Score (0–100) from cashflow, EMI, savings, bills
+  const financialHealth = useMemo(
+    () =>
+      computeFinancialHealthScore({
+        data,
+        debts,
+        sideIncomes,
+        budgetCategories,
+        creditScores,
+        assets,
+      }),
+    [creditScores, data, debts, sideIncomes, budgetCategories, assets],
+  );
+  const financialHealthScore = financialHealth.score;
 
   // Monthly side income total
   const totalSideIncome = useMemo(() => {
@@ -567,22 +530,14 @@ const FinancialAssistant = ({
       .reduce((sum, t) => sum + t.amount, 0);
   }, [data.transactions, timePeriods, selectedPeriodIndex]);
 
-  // Net Worth calculation (Assets - Liabilities)
+  // Net Worth — same integrated rollup as Home / Net Worth / AI
   const netWorthData = useMemo(() => {
-    const totalAssets = 
-      assets.reduce((sum, a) => sum + a.value, 0) +
-      data.savingsPlans.reduce((sum, s) => sum + (s.currentAmount || 0), 0) +
-      (data.savingsItems || []).reduce((sum, s) => sum + (s.principal || 0), 0) +
-      data.investments.reduce((sum, i) => sum + (i.currentValue || 0), 0);
-
-    const totalLiabilities = 
-      debts.reduce((sum, d) => sum + d.remaining, 0) +
-      data.emis.reduce((sum, e) => sum + (e.monthlyAmount || 0) * (e.remainingMonths || 0), 0);
-
+    const rollup = computeFinanceRollup();
     return {
-      netWorth: totalAssets - totalLiabilities,
-      assets: totalAssets,
-      liabilities: totalLiabilities
+      netWorth: rollup.netWorth,
+      assets: rollup.totalAssets,
+      liabilities: rollup.totalLiabilities,
+      lines: rollup.liabilities.slice(0, 12),
     };
   }, [assets, data, debts]);
 
@@ -1071,7 +1026,7 @@ const FinancialAssistant = ({
   return (
     <div className="w-full h-full bg-background flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-border bg-background overflow-x-auto">
+      <div className="flex-none border-b border-border bg-background px-6 pt-4 pb-2">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="font-semibold text-lg text-foreground">Finance Manager</h2>
@@ -1079,8 +1034,9 @@ const FinancialAssistant = ({
           </div>
         </div>
 
-        {/* View Tabs */}
-        <div className="flex gap-1 mt-3 bg-muted rounded-lg p-1 overflow-x-auto">
+        {/* Scroll lives outside the pill bar so the bar isn’t covered */}
+        <div className="mt-3 -mx-1 overflow-x-auto overscroll-x-contain pb-2 [scrollbar-gutter:stable]">
+          <div className="inline-flex w-max min-w-full gap-1 rounded-lg bg-muted p-1">
           <Button 
             variant={activeViewTab === 'dashboard' ? 'default' : 'ghost'}
             size="sm"
@@ -1162,6 +1118,7 @@ const FinancialAssistant = ({
             <Coins className="h-4 w-4 mr-1" />
             Currency
           </Button>
+          </div>
         </div>
       </div>
       {/* Net Worth View */}
@@ -1512,28 +1469,29 @@ const FinancialAssistant = ({
                 <Card className="border-border">
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm">Liabilities</CardTitle>
+                    <p className="text-[11px] text-muted-foreground font-normal">
+                      Loans, money to give, and more — same totals as Net Worth
+                    </p>
                   </CardHeader>
                   <CardContent>
-                    {debts.length === 0 && data.emis.length === 0 ? (
+                    {netWorthData.lines.length === 0 ? (
                       <p className="text-center text-muted-foreground py-4">No liabilities</p>
                     ) : (
                       <div className="space-y-2">
-                        {debts.map(debt => (
-                          <div key={debt.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                            <div>
-                              <p className="text-sm font-medium">{debt.name}</p>
-                              <p className="text-xs text-muted-foreground capitalize">{debt.type}</p>
+                        {netWorthData.lines.map((line) => (
+                          <div
+                            key={line.id}
+                            className="flex items-center justify-between py-2 border-b border-border last:border-0"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium truncate">{line.name}</p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {line.note || line.manageIn}
+                              </p>
                             </div>
-                            <span className="font-semibold text-red-500">{money(debt.remaining.toFixed(2))}</span>
-                          </div>
-                        ))}
-                        {data.emis.map(emi => (
-                          <div key={emi.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                            <div>
-                              <p className="text-sm font-medium">{emi.name}</p>
-                              <p className="text-xs text-muted-foreground">EMI - {emi.remainingMonths} months left</p>
-                            </div>
-                            <span className="font-semibold text-red-500">{money(((emi.monthlyAmount || 0) * (emi.remainingMonths || 0)).toFixed(2))}</span>
+                            <span className="font-semibold text-red-500 tabular-nums flex-shrink-0 ml-2">
+                              {money(line.amount.toFixed(2))}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -1551,6 +1509,8 @@ const FinancialAssistant = ({
         <FinanceDashboard
           onNavigate={(tab) => setActiveViewTab(tab)}
           healthScore={financialHealthScore}
+          healthLabel={financialHealth.label}
+          healthHint={financialHealth.pillars[0]?.note}
           sideIncome={totalSideIncome}
         />
       )}

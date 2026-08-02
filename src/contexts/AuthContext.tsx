@@ -10,6 +10,8 @@ import {
 import {
   AuthUser,
   clearSession,
+  clearTourPending,
+  deleteAccountOnServer,
   exchangeGoogleCredential,
   fetchCurrentUser,
   getStoredToken,
@@ -19,9 +21,11 @@ import {
   markTourPending,
   persistSession,
   recordLoginCountry,
+  removeLocalAccountMirror,
   signInLocal as signInLocalAccount,
   signUpLocal as signUpLocalAccount,
   syncProfileToSettings,
+  tourDoneKey,
 } from "@/services/authService";
 import {
   applyRegionProfile,
@@ -31,6 +35,8 @@ import {
   type ConsentKind,
 } from "@/services/regionService";
 import { hydrateFromBackend, notifyUserScopeChanged } from "@/services/persistSync";
+import { clearAllUserLocalData } from "@/services/userStorage";
+import { deleteUserDocumentsDatabase } from "@/services/documentService";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -47,7 +53,7 @@ interface AuthContextValue {
     consentKind?: ConsentKind;
     consentAccepted?: boolean;
   }) => Promise<void>;
-  signInWithGoogle: (credential: string) => Promise<void>;
+  signInWithGoogle: (credential: string, mode?: "signin" | "signup") => Promise<void>;
   /** Finish Cognito / OAuth redirect session */
   completeOAuthSession: (session: {
     access_token: string;
@@ -55,6 +61,8 @@ interface AuthContextValue {
     user: AuthUser;
   }) => Promise<void>;
   signOut: () => void;
+  /** Permanently delete account + local data, then sign out */
+  deleteAccount: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -136,6 +144,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         consentAccepted?: boolean;
       },
     ) => {
+      const isFresh = Boolean(opts?.isRegistration || session.is_new_user);
+      // After account deletion, Google may reuse the same user id — wipe leftovers first
+      if (isFresh && session.user?.id) {
+        clearAllUserLocalData(session.user.id);
+        deleteUserDocumentsDatabase(session.user.id);
+        try {
+          localStorage.removeItem(tourDoneKey(session.user.id));
+        } catch {
+          /* ignore */
+        }
+        clearTourPending();
+      }
+
       persistSession(session as Parameters<typeof persistSession>[0]);
       syncProfileToSettings(session.user);
       setUser(session.user);
@@ -143,14 +164,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       notifyUserScopeChanged();
       void hydrateFromBackend();
 
-      if (opts?.isRegistration || session.is_new_user) {
+      if (isFresh) {
         markTourPending(session.user.id);
       }
 
       // On register: set currency / locale / consent from detected country
-      if (opts?.isRegistration) {
-        let country = opts.country || "";
-        let countryCode = opts.countryCode || "";
+      if (opts?.isRegistration || isFresh) {
+        let country = opts?.country || "";
+        let countryCode = opts?.countryCode || "";
         if (!countryCode) {
           try {
             const geo = await detectLoginCountry();
@@ -166,8 +187,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         applyRegionProfile(profile);
         saveLegalConsent({
-          kind: opts.consentKind || profile.consentKind,
-          accepted: opts.consentAccepted !== false,
+          kind: opts?.consentKind || profile.consentKind,
+          accepted: opts?.consentAccepted !== false,
           acceptedAt: new Date().toISOString(),
           country: profile.country,
           countryCode: profile.countryCode,
@@ -218,8 +239,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signInWithGoogle = useCallback(
-    async (credential: string) => {
-      const session = await exchangeGoogleCredential(credential);
+    async (credential: string, mode: "signin" | "signup" = "signin") => {
+      const session = await exchangeGoogleCredential(credential, mode);
       persistSession(session);
       const needsRegion = !getRegionProfile() || Boolean(session.is_new_user);
       await applySession(session, { isRegistration: needsRegion });
@@ -249,6 +270,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     notifyUserScopeChanged();
   }, []);
 
+  const deleteAccount = useCallback(async () => {
+    const uid = user?.id || getStoredUser()?.id || "";
+    const email = user?.email || getStoredUser()?.email || "";
+    const tok = token || getStoredToken();
+    if (!tok) {
+      throw new Error("You must be signed in to delete your account.");
+    }
+    const result = await deleteAccountOnServer(tok);
+    removeLocalAccountMirror({ email: result.email || email, userId: uid });
+    if (uid) {
+      clearAllUserLocalData(uid);
+      deleteUserDocumentsDatabase(uid);
+      try {
+        localStorage.removeItem(tourDoneKey(uid));
+      } catch {
+        /* ignore */
+      }
+    }
+    clearTourPending();
+    clearSession();
+    setUser(null);
+    setToken(null);
+    notifyUserScopeChanged();
+  }, [token, user?.email, user?.id]);
+
   const value = useMemo(
     () => ({
       user,
@@ -259,6 +305,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInWithGoogle,
       completeOAuthSession,
       signOut,
+      deleteAccount,
     }),
     [
       user,
@@ -269,6 +316,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInWithGoogle,
       completeOAuthSession,
       signOut,
+      deleteAccount,
     ],
   );
 

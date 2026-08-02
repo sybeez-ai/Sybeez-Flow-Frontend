@@ -39,13 +39,22 @@ export default function AuthCallback() {
         const session = await completeCognitoCallback({ code, state });
         if (cancelled) return;
         await completeOAuthSession(session);
-        toast.success("Signed in with Google");
+        toast.success(
+          session.is_new_user ? "Welcome to Sybeez Flow" : "Signed in with Google",
+        );
         navigate("/", { replace: true });
       } catch (e) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : "Google sign-in failed";
         toast.error(msg);
-        navigate("/signin", { replace: true });
+        const lower = msg.toLowerCase();
+        if (lower.includes("already exists")) {
+          navigate("/signin", { replace: true });
+        } else if (lower.includes("no account") || lower.includes("sign up")) {
+          navigate("/signup", { replace: true });
+        } else {
+          navigate("/signin", { replace: true });
+        }
       }
     };
 

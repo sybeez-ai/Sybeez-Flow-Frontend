@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Loader2, Plus, Send, X } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ArrowUp, Loader2, Plus, Send } from "lucide-react";
+import { AssistantMarkdown } from "@/components/chat/AssistantMarkdown";
 import { Textarea } from "@/components/ui/textarea";
 import { askAIDetailed } from "@/services/aiService";
 import { chatHistory } from "@/services/chatHistory";
@@ -18,12 +17,45 @@ import {
 } from "@/services/chatSessionStore";
 import ChatHistoryPopover from "@/components/ChatHistoryPopover";
 import { SybeezChatAvatar, UserChatAvatar } from "@/components/ChatAvatars";
+import InvestmentAnalyticsChart, {
+  type InvestmentAnalyticsPayload,
+} from "@/components/InvestmentAnalyticsChart";
 import { currentUserId, usGetItem, usRemoveItem, usSetItem, userSessionId } from "@/services/userStorage";
 import { USER_SCOPE_CHANGED_EVENT } from "@/services/persistSync";
+import { cn } from "@/lib/utils";
+
+const PANEL_WIDTH_KEY = "sybeez_assistant_panel_width";
+const DEFAULT_PANEL_WIDTH = 420;
+const MIN_PANEL_WIDTH = 300;
+const MAX_PANEL_WIDTH = 720;
+
+function clampPanelWidth(width: number) {
+  const viewportCap =
+    typeof window !== "undefined"
+      ? Math.floor(window.innerWidth * 0.55)
+      : MAX_PANEL_WIDTH;
+  const max = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, viewportCap));
+  return Math.round(Math.min(max, Math.max(MIN_PANEL_WIDTH, width)));
+}
+
+function readStoredPanelWidth() {
+  try {
+    const raw = localStorage.getItem(PANEL_WIDTH_KEY);
+    const n = raw ? Number(raw) : NaN;
+    if (Number.isFinite(n)) return clampPanelWidth(n);
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_PANEL_WIDTH;
+}
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** Optional inline investment analytics charts (session UI) */
+  analytics?: InvestmentAnalyticsPayload;
+  /** Suggested follow-up prompts under the reply */
+  followups?: string[];
 }
 
 interface GmailDraft {
@@ -58,8 +90,6 @@ export interface AssistantPanelProps {
   getContext?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   /** Allow live web search / RAG on the backend. */
   useWebSearch?: boolean;
-  /** Omit to keep the panel pinned (no close button). */
-  onClose?: () => void;
 }
 
 const AssistantPanel = ({
@@ -72,7 +102,6 @@ const AssistantPanel = ({
   suggestions = [],
   getContext,
   useWebSearch = false,
-  onClose,
 }: AssistantPanelProps) => {
   const [activeSessionId, setActiveSessionId] = useState(() => {
     try {
@@ -90,8 +119,33 @@ const AssistantPanel = ({
     baseSessionId === "gmail-assistant" ? readGmailDraft() : null,
   );
   const [sendingReply, setSendingReply] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(readStoredPanelWidth);
+  const [isResizing, setIsResizing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const panelWidthRef = useRef(panelWidth);
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  const hydratedRef = useRef(hydrated);
+  const isLoadingRef = useRef(isLoading);
+  const pendingAskRef = useRef<{
+    prompt: string;
+    displayText?: string;
+    contextExtra?: Record<string, unknown>;
+  } | null>(null);
+  const sendRef = useRef<(
+    text: string,
+    opts?: { displayText?: string; contextExtra?: Record<string, unknown> },
+  ) => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  useEffect(() => {
+    hydratedRef.current = hydrated;
+  }, [hydrated]);
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
 
   const resizeComposer = () => {
     const el = textareaRef.current;
@@ -99,6 +153,67 @@ const AssistantPanel = ({
     el.style.height = "0px";
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 24), 160)}px`;
   };
+
+  useEffect(() => {
+    panelWidthRef.current = panelWidth;
+  }, [panelWidth]);
+
+  const persistPanelWidth = useCallback((width: number) => {
+    try {
+      localStorage.setItem(PANEL_WIDTH_KEY, String(width));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const onResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMove = (e: PointerEvent) => {
+      const next = clampPanelWidth(window.innerWidth - e.clientX);
+      panelWidthRef.current = next;
+      setPanelWidth(next);
+    };
+
+    const onUp = () => {
+      setIsResizing(false);
+      persistPanelWidth(panelWidthRef.current);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [isResizing, persistPanelWidth]);
+
+  useEffect(() => {
+    const onWindowResize = () => {
+      setPanelWidth((w) => {
+        const next = clampPanelWidth(w);
+        if (next !== w) persistPanelWidth(next);
+        return next;
+      });
+    };
+    window.addEventListener("resize", onWindowResize);
+    return () => window.removeEventListener("resize", onWindowResize);
+  }, [persistPanelWidth]);
 
   // Remember active thread so reload continues the same conversation
   useEffect(() => {
@@ -168,30 +283,7 @@ const AssistantPanel = ({
     return () => window.removeEventListener(OPEN_CHAT_SESSION_EVENT, onOpen);
   }, [baseSessionId]);
 
-  // Review tab → inject AI weekly review into Productivity Coach chat
-  useEffect(() => {
-    if (baseSessionId !== "productivity-coach") return;
-    const onReview = (e: Event) => {
-      const detail = (e as CustomEvent<{ text?: string; week?: string }>).detail;
-      const text = (detail?.text || "").trim();
-      if (!text) return;
-      setMessages((prev) => {
-        const next: ChatMessage[] = [
-          ...prev,
-          { role: "user", content: "Generate my weekly review" },
-          { role: "assistant", content: text },
-        ];
-        void persistChatSession(
-          activeSessionId,
-          next,
-          `Weekly review${detail?.week ? ` (${detail.week})` : ""}`,
-        ).then(() => window.dispatchEvent(new Event("sybeez-chat-saved")));
-        return next;
-      });
-    };
-    window.addEventListener("sybeez-planner-review", onReview);
-    return () => window.removeEventListener("sybeez-planner-review", onReview);
-  }, [baseSessionId, activeSessionId]);
+  // (Weekly review from History uses sybeez:coach-ask → chat only)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -227,18 +319,47 @@ const AssistantPanel = ({
     setInput("");
   };
 
-  const send = async (text: string) => {
-    const prompt = text.trim();
-    if (!prompt || isLoading || !hydrated) return;
+  const flushPendingAsk = () => {
+    const pending = pendingAskRef.current;
+    if (!pending?.prompt) return;
+    if (!hydratedRef.current || isLoadingRef.current) return;
+    pendingAskRef.current = null;
+    void sendRef.current(pending.prompt, {
+      displayText: pending.displayText,
+      contextExtra: pending.contextExtra,
+    });
+  };
 
-    const nextHistory = [...messages];
-    const withUser: ChatMessage[] = [...nextHistory, { role: "user", content: prompt }];
+  const send = async (
+    text: string,
+    opts?: { displayText?: string; contextExtra?: Record<string, unknown> },
+  ) => {
+    const prompt = text.trim();
+    if (!prompt) return;
+
+    // Queue Ask-AI / suggestions until chat is ready or current reply finishes
+    if (!hydratedRef.current || isLoadingRef.current) {
+      pendingAskRef.current = {
+        prompt,
+        displayText: opts?.displayText,
+        contextExtra: opts?.contextExtra,
+      };
+      return;
+    }
+
+    const nextHistory = [...messagesRef.current];
+    const displayText = (opts?.displayText || prompt).trim();
+    const withUser: ChatMessage[] = [
+      ...nextHistory,
+      { role: "user", content: displayText },
+    ];
     setMessages(withUser);
     setInput("");
     setIsLoading(true);
+    isLoadingRef.current = true;
 
     if (nextHistory.length === 0) {
-      chatHistory.add(prompt, activeSessionId, title);
+      chatHistory.add(displayText, activeSessionId, title);
     }
 
     try {
@@ -250,6 +371,9 @@ const AssistantPanel = ({
           : (raw as Record<string, unknown>)) ?? {};
       } catch {
         /* ignore */
+      }
+      if (opts?.contextExtra && typeof opts.contextExtra === "object") {
+        context = { ...context, ...opts.contextExtra };
       }
       const web =
         useWebSearch ||
@@ -267,9 +391,35 @@ const AssistantPanel = ({
         context.feature === "finance"
           ? sanitizeAssistantText(reply, context.financeSnapshot)
           : reply;
+      const analyticsAction = actions.find(
+        (a) => a.type === "show_investment_analytics" && a.ok !== false,
+      );
+      const analytics: InvestmentAnalyticsPayload | undefined = analyticsAction
+        ? {
+            type: "show_investment_analytics",
+            ok: true,
+            empty: Boolean(analyticsAction.empty),
+            portfolio_series: analyticsAction.portfolio_series,
+            holdings: analyticsAction.holdings as InvestmentAnalyticsPayload["holdings"],
+            summary: analyticsAction.summary,
+            projections: analyticsAction.projections as InvestmentAnalyticsPayload["projections"],
+          }
+        : undefined;
+      const followAction = actions.find(
+        (a) => a.type === "suggest_followups" && Array.isArray(a.suggestions),
+      );
+      const followups = (followAction?.suggestions || [])
+        .map((s) => String(s || "").trim())
+        .filter(Boolean)
+        .slice(0, 4);
       const withAssistant: ChatMessage[] = [
         ...withUser,
-        { role: "assistant", content: safe },
+        {
+          role: "assistant",
+          content: safe,
+          analytics,
+          followups: followups.length ? followups : undefined,
+        },
       ];
       setMessages(withAssistant);
       if (baseSessionId === "gmail-assistant") {
@@ -291,8 +441,7 @@ const AssistantPanel = ({
           setGmailDraft(null);
         }
       }
-      const threadTitle =
-        (nextHistory.find((m) => m.role === "user")?.content || prompt).slice(0, 100);
+      const threadTitle = displayText.slice(0, 100);
       // Persist full thread (SQLite append-only)
       void persistChatSession(activeSessionId, withAssistant, threadTitle).then(() => {
         window.dispatchEvent(new Event("sybeez-chat-saved"));
@@ -308,24 +457,43 @@ const AssistantPanel = ({
       void persistChatSession(
         activeSessionId,
         withErr,
-        (nextHistory.find((m) => m.role === "user")?.content || prompt).slice(0, 100),
+        displayText.slice(0, 100),
       );
     } finally {
       setIsLoading(false);
+      isLoadingRef.current = false;
+      // Run any Ask-AI that arrived while we were loading / hydrating
+      queueMicrotask(() => flushPendingAsk());
     }
   };
+  sendRef.current = send;
 
-  // Goals / other panels can ask the coach with a ready prompt
+  // Flush queued Ask-AI once chat history has hydrated
+  useEffect(() => {
+    if (hydrated && !isLoading) flushPendingAsk();
+  }, [hydrated, isLoading]);
+
+  // Goals / Reports / other panels can ask the coach with a ready prompt
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ sessionId?: string; prompt?: string }>).detail;
+      const detail = (
+        e as CustomEvent<{
+          sessionId?: string;
+          prompt?: string;
+          displayPrompt?: string;
+          contextExtra?: Record<string, unknown>;
+        }>
+      ).detail;
       if (!detail?.prompt) return;
       if (detail.sessionId && detail.sessionId !== baseSessionId) return;
-      void send(detail.prompt);
+      void sendRef.current(detail.prompt, {
+        displayText: detail.displayPrompt,
+        contextExtra: detail.contextExtra,
+      });
     };
     window.addEventListener("sybeez:coach-ask", onAsk);
     return () => window.removeEventListener("sybeez:coach-ask", onAsk);
-  });
+  }, [baseSessionId]);
 
   const sendGmailDraft = async () => {
     const draft = readGmailDraft() || gmailDraft;
@@ -364,7 +532,40 @@ const AssistantPanel = ({
   };
 
   return (
-    <aside className="w-[420px] flex-none flex flex-col border-l border-border bg-card/30">
+    <aside
+      className="relative flex-none flex flex-col border-l border-border bg-card/30"
+      style={{ width: panelWidth }}
+      aria-label={`${title} panel`}
+    >
+      {/* Drag handle — resize chat width */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chat panel"
+        aria-valuenow={panelWidth}
+        aria-valuemin={MIN_PANEL_WIDTH}
+        aria-valuemax={MAX_PANEL_WIDTH}
+        title="Drag to resize · double-click to reset"
+        onPointerDown={onResizePointerDown}
+        onDoubleClick={() => {
+          setPanelWidth(DEFAULT_PANEL_WIDTH);
+          persistPanelWidth(DEFAULT_PANEL_WIDTH);
+        }}
+        className={cn(
+          "absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none",
+          "flex items-center justify-center group",
+        )}
+      >
+        <span
+          className={cn(
+            "h-10 w-[3px] rounded-full transition-colors",
+            isResizing
+              ? "bg-foreground/50"
+              : "bg-border group-hover:bg-foreground/35",
+          )}
+        />
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between px-4 h-[57px] border-b border-border/60">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -389,15 +590,6 @@ const AssistantPanel = ({
           >
             <Plus className="h-4 w-4" />
           </button>
-          {onClose && (
-            <button
-              onClick={onClose}
-              title="Close"
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
         </div>
       </div>
 
@@ -432,16 +624,39 @@ const AssistantPanel = ({
               <div key={i} className={`flex gap-2.5 items-start ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 {m.role === "assistant" && <SybeezChatAvatar messageAlign />}
                 <div
-                  className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed ${
+                  className={`rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed ${
                     m.role === "user"
-                      ? "bg-foreground text-background whitespace-pre-wrap"
-                      : "border border-border bg-background text-foreground"
+                      ? "max-w-[82%] bg-foreground text-background whitespace-pre-wrap"
+                      : m.analytics
+                        ? "max-w-[95%] border border-border bg-background text-foreground"
+                        : "max-w-[82%] border border-border bg-background text-foreground"
                   }`}
                 >
                   {m.role === "assistant" ? (
-                    <div className="assistant-md [&_p]:mb-2.5 [&_p:last-child]:mb-0 [&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-[15px] [&_h1]:font-semibold [&_h1:first-child]:mt-0 [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-[14px] [&_h2]:font-semibold [&_h2:first-child]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-2.5 [&_h3]:text-[13.5px] [&_h3]:font-semibold [&_h3:first-child]:mt-0 [&_ul]:my-2 [&_ul]:space-y-1.5 [&_ol]:my-2 [&_ol]:space-y-1.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_ul]:list-none [&_ul]:pl-0 [&_li]:leading-relaxed [&_strong]:font-semibold [&_strong]:text-foreground [&_a]:underline [&_hr]:my-3 [&_hr]:border-border">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-                    </div>
+                    <>
+                      <AssistantMarkdown content={m.content} />
+                      {m.analytics && !m.analytics.empty && (
+                        <InvestmentAnalyticsChart data={m.analytics} />
+                      )}
+                      {!!m.followups?.length && (
+                        <div className="mt-3 flex flex-col gap-1.5">
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Ask next
+                          </p>
+                          {m.followups.map((q) => (
+                            <button
+                              key={q}
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => void send(q)}
+                              className="rounded-xl border border-border bg-muted/30 px-3 py-2 text-left text-[12px] text-muted-foreground transition-colors hover:border-foreground/25 hover:bg-muted hover:text-foreground disabled:opacity-50"
+                            >
+                              {q}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     m.content
                   )}
@@ -500,7 +715,7 @@ const AssistantPanel = ({
             }}
             placeholder={placeholder}
             rows={1}
-            className="min-h-[24px] max-h-40 flex-1 resize-none overflow-y-auto border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 text-[13.5px] leading-relaxed"
+            className="min-h-[24px] max-h-40 flex-1 resize-none overflow-y-auto border-0 bg-transparent py-0.5 pl-1.5 pr-1 shadow-none focus-visible:ring-0 text-[13.5px] leading-relaxed caret-foreground"
           />
           <button
             type="submit"

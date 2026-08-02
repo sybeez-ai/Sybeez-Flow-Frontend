@@ -7,6 +7,7 @@ import { usGetItem } from "@/services/userStorage";
 
 import { LifeManagementService } from "@/services/lifeManagement";
 import { appCurrencyCode } from "@/services/regionService";
+import { computeFinanceRollup } from "@/services/financeRollup";
 
 function readJSON(key: string): unknown {
   try {
@@ -66,10 +67,6 @@ export function buildFinanceAssistantContextSync(
     .filter((t) => t.type === "expense")
     .reduce((s, t) => s + num(t.amount), 0);
 
-  const savingsTotal =
-    savingsItems.reduce((s, i) => s + num(i.principal), 0) +
-    savingsPlans.reduce((s, p) => s + num(p.currentAmount), 0);
-
   const savingsByKind: Record<string, number> = {};
   for (const i of savingsItems) {
     const k = String(i.kind || "other");
@@ -77,10 +74,6 @@ export function buildFinanceAssistantContextSync(
   }
 
   const emiMonthly = emis.reduce((s, e) => s + num(e.monthlyAmount), 0);
-  const emiRemaining = emis.reduce(
-    (s, e) => s + num(e.monthlyAmount) * Math.max(0, num(e.remainingMonths)),
-    0,
-  );
 
   const subMonthly = subscriptions.reduce((s, sub) => {
     const a = num(sub.amount);
@@ -91,11 +84,11 @@ export function buildFinanceAssistantContextSync(
 
   const insuranceYearly = insurances.reduce((s, i) => s + num(i.premium), 0);
 
-  const assets = Array.isArray(extras.assets) ? extras.assets : [];
-  const debts = Array.isArray(extras.debts) ? extras.debts : [];
-  const assetTotal = assets.reduce((s: number, a: any) => s + num(a.value), 0);
-  const debtTotal =
-    debts.reduce((s: number, d: any) => s + num(d.remaining ?? d.amount), 0) + emiRemaining;
+  const pf = portfolio && typeof portfolio === "object" ? portfolio : null;
+  const pfStocks = Array.isArray(pf?.stocks) ? (pf!.stocks as any[]) : [];
+  const rollup = computeFinanceRollup({
+    portfolioCurrent: num(pf?.total_current),
+  });
 
   const upcoming = LifeManagementService.getUpcomingPayments(14);
 
@@ -122,9 +115,6 @@ export function buildFinanceAssistantContextSync(
       date: t.date,
     }));
 
-  const pf = portfolio && typeof portfolio === "object" ? portfolio : null;
-  const pfStocks = Array.isArray(pf?.stocks) ? (pf!.stocks as any[]) : [];
-
   const financeSnapshot = {
     currency: appCurrencyCode(),
     asOf: new Date().toISOString(),
@@ -137,15 +127,17 @@ export function buildFinanceAssistantContextSync(
       transactionCount: monthTxns.length,
     },
     totals: {
-      savings: savingsTotal,
+      savings: rollup.buckets.savings,
       savingsByKind,
       emiMonthly,
-      emiRemainingBalance: emiRemaining,
+      emiRemainingBalance: rollup.buckets.emis,
+      moneyToGive: rollup.buckets.moneyToGive,
+      moneyToCollect: rollup.buckets.moneyToCollect,
       subscriptionsMonthly: subMonthly,
       insuranceYearly,
-      assets: assetTotal,
-      liabilities: debtTotal,
-      netWorthApprox: assetTotal + savingsTotal - debtTotal + num(pf?.total_current),
+      assets: rollup.totalAssets,
+      liabilities: rollup.totalLiabilities,
+      netWorthApprox: rollup.netWorth,
       portfolioInvested: num(pf?.total_invested),
       portfolioCurrent: num(pf?.total_current),
       portfolioPl: num(pf?.total_pl),
@@ -237,10 +229,14 @@ export function buildFinanceAssistantContextSync(
     })),
     portfolio: pf
       ? {
+          currency: pf.currency || appCurrencyCode(),
           total_invested: num(pf.total_invested),
           total_current: num(pf.total_current),
           total_pl: num(pf.total_pl),
           total_pl_pct: num(pf.total_pl_pct),
+          day_pl: num(pf.day_pl),
+          day_pl_pct: num(pf.day_pl_pct),
+          mixed_currency: Boolean(pf.mixed_currency),
           stocks: pfStocks.slice(0, 40).map((s) => ({
             symbol: s.symbol,
             name: s.name,
@@ -248,6 +244,7 @@ export function buildFinanceAssistantContextSync(
             avg_buy_price: num(s.avg_buy_price),
             price: num(s.price),
             change_pct: num(s.change_pct),
+            day_pl: num(s.day_pl),
             invested: num(s.invested),
             current_value: num(s.current_value),
             pl: num(s.pl),
@@ -255,7 +252,15 @@ export function buildFinanceAssistantContextSync(
             currency: s.currency,
           })),
         }
-      : { stocks: [], total_invested: 0, total_current: 0, total_pl: 0, total_pl_pct: 0 },
+      : {
+          stocks: [],
+          total_invested: 0,
+          total_current: 0,
+          total_pl: 0,
+          total_pl_pct: 0,
+          day_pl: 0,
+          day_pl_pct: 0,
+        },
     assets: assets.map((a: any) => ({
       id: a.id,
       name: a.name,
@@ -297,17 +302,28 @@ export function buildFinanceAssistantContextSync(
 }
 
 /** Async: pulls live Investment Hub portfolio quotes into context. */
-export async function buildFinanceAssistantContextAsync(): Promise<Record<string, unknown>> {
-  const API = (import.meta.env.VITE_API_URL || "http://localhost:8000") + "/api/stocks";
+export async function buildFinanceAssistantContextAsync(opts?: {
+  currentTab?: string;
+  pathname?: string;
+}): Promise<Record<string, unknown>> {
   let portfolio: Record<string, unknown> | null = null;
   try {
-    const res = await fetch(`${API}/quotes`, { signal: AbortSignal.timeout(8000) });
-    if (res.ok) {
-      const data = await res.json();
-      if (data && typeof data === "object") portfolio = data as Record<string, unknown>;
-    }
+    const { stocksApi } = await import("@/services/stocksApi");
+    const data = await stocksApi.quotes();
+    if (data && typeof data === "object") portfolio = data as unknown as Record<string, unknown>;
   } catch {
     /* portfolio optional offline */
   }
-  return buildFinanceAssistantContextSync(portfolio);
+  const base = buildFinanceAssistantContextSync(portfolio);
+  return {
+    ...base,
+    currentTab: opts?.currentTab || "",
+    financeTab: opts?.currentTab || "",
+    pathname: opts?.pathname || (typeof window !== "undefined" ? window.location.pathname : ""),
+    page: {
+      view: "finance",
+      tab: opts?.currentTab || "",
+      path: opts?.pathname || "",
+    },
+  };
 }

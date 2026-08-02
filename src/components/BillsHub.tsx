@@ -28,6 +28,7 @@ import type { EMI, Insurance, Subscription } from "@/types/lifeManagement";
 import { formatAppMoney, appCurrencySymbol } from "@/services/regionService";
 import { useAppCurrency } from "@/hooks/useAppCurrency";
 import CommitmentsAndPeople from "@/components/CommitmentsAndPeople";
+import { computeFinanceRollup, emiOutstanding } from "@/services/financeRollup";
 import { cn } from "@/lib/utils";
 
 type FormKind = "emi" | "insurance" | "subscription" | null;
@@ -123,7 +124,7 @@ function emiStats(emi: EMI) {
   const monthly = Number(emi.monthlyAmount) || 0;
   const totalPayable = monthly * tenure;
   const paidAmount = monthly * paidMonths;
-  const remainingAmount = monthly * remaining;
+  const remainingAmount = emiOutstanding(emi);
   const principal = Number(emi.principalAmount) || 0;
   const interestTotal =
     principal > 0
@@ -178,6 +179,11 @@ export default function BillsHub() {
   const [formKind, setFormKind] = useState<FormKind>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
+
+  const debtSummary = useMemo(() => {
+    const b = computeFinanceRollup().buckets;
+    return { emis: b.emis, emiMonthly: b.emiMonthly, moneyToGive: b.moneyToGive };
+  }, [emis]);
 
   const reload = useCallback(() => {
     const data = LifeManagementService.getData();
@@ -556,22 +562,49 @@ export default function BillsHub() {
         {/* EMIs */}
         <Card className="border-border bg-background">
           <CardHeader className="border-b border-border pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Building className="h-4 w-4" />
-                EMIs & Loans
-              </CardTitle>
-              <Button size="sm" variant="outline" onClick={() => openAdd("emi")}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Building className="h-4 w-4" />
+                  EMIs &amp; Loans
+                </CardTitle>
+                <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
+                  Every loan here is counted in{" "}
+                  <span className="text-foreground font-medium">Net Worth → Liabilities</span>
+                  {" "}· Money to give / collect is under Commitments
+                </p>
+              </div>
+              <Button size="sm" variant="outline" className="flex-shrink-0" onClick={() => openAdd("emi")}>
                 <Plus className="h-3 w-3 mr-1" />
                 Add
               </Button>
             </div>
+            {emis.length > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-3 py-2">
+                  <p className="text-[10px] uppercase text-rose-400/80">In liabilities</p>
+                  <p className="text-sm font-semibold text-rose-400 tabular-nums">
+                    {money(debtSummary.emis)}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+                  <p className="text-[10px] uppercase text-muted-foreground">Monthly EMIs</p>
+                  <p className="text-sm font-semibold tabular-nums">
+                    {money(debtSummary.emiMonthly)}
+                  </p>
+                </div>
+              </div>
+            )}
           </CardHeader>
           <CardContent className="pt-3 space-y-3">
             {formKind === "emi" && (
               <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2">
                 <p className="text-xs font-medium">
                   {editingId ? "Edit loan" : "Add loan / EMI"}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  Tip: add <span className="text-foreground">loan principal</span> when you know it —
+                  that amount becomes your liability (clearest for net worth).
                 </p>
                 <Input
                   placeholder="Name (e.g. Home loan)"
