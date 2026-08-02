@@ -25,8 +25,14 @@ import {
   fetchAdminFeedback,
   fetchFeedbackStatus,
   isFeedbackSubmittedLocal,
+  labelPriceRange,
+  labelWillingness,
+  PRICE_OPTIONS,
   submitFeedback,
+  WILLINGNESS_OPTIONS,
   type FeedbackAdminItem,
+  type PriceRange,
+  type WillingnessToPay,
 } from "@/services/feedbackApi";
 import { clearFeedbackNudgeNotifications } from "@/services/notificationService";
 
@@ -59,6 +65,8 @@ export default function FeedbackSection() {
   const [issues, setIssues] = useState("");
   const [improve, setImprove] = useState("");
   const [recommend, setRecommend] = useState(true);
+  const [willingness, setWillingness] = useState<WillingnessToPay | "">("");
+  const [priceRange, setPriceRange] = useState<PriceRange | "">("");
   const [adminItems, setAdminItems] = useState<FeedbackAdminItem[]>([]);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -100,6 +108,8 @@ export default function FeedbackSection() {
     setSatisfaction(4);
     setCategory("general");
     setRecommend(true);
+    setWillingness("");
+    setPriceRange("");
   };
 
   const openForm = () => {
@@ -116,6 +126,14 @@ export default function FeedbackSection() {
       toast.error("Please fill in the issue you face and what to improve");
       return;
     }
+    if (!willingness) {
+      toast.error("Please choose willingness to pay");
+      return;
+    }
+    if (!priceRange) {
+      toast.error("Please choose a monthly price range");
+      return;
+    }
     setSending(true);
     try {
       await submitFeedback({
@@ -124,6 +142,8 @@ export default function FeedbackSection() {
         improve: improve.trim(),
         category,
         recommend,
+        willingness_to_pay: willingness,
+        price_range: priceRange,
       });
       setHasSubmittedBefore(true);
       setSubmitCount((c) => c + 1);
@@ -322,6 +342,52 @@ export default function FeedbackSection() {
                   </div>
                 </div>
 
+                <div>
+                  <p className="text-sm font-medium mb-1">Willingness to pay</p>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    If Sybeez Flow continues improving, would you consider paying for it?
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {WILLINGNESS_OPTIONS.map((o) => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => setWillingness(o.value)}
+                        className={`rounded-full px-3 py-1.5 text-xs border transition-colors ${
+                          willingness === o.value
+                            ? "border-foreground bg-foreground text-background"
+                            : "border-border text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium mb-1">Pricing</p>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    What monthly price would you consider reasonable?
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {PRICE_OPTIONS.map((o) => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => setPriceRange(o.value)}
+                        className={`rounded-full px-3 py-1.5 text-xs border transition-colors ${
+                          priceRange === o.value
+                            ? "border-foreground bg-foreground text-background"
+                            : "border-border text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="flex gap-2 pt-1">
                   <Button
                     type="button"
@@ -396,6 +462,10 @@ export default function FeedbackSection() {
                             : ""}{" "}
                           · {item.category}
                           {item.recommend ? " · recommends" : " · not yet"}
+                          {" · pay: "}
+                          {labelWillingness(item.willingness_to_pay)}
+                          {" · "}
+                          {labelPriceRange(item.price_range)}
                         </p>
                       </div>
                       <span className="text-xl">{face}</span>
