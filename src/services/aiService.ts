@@ -44,7 +44,9 @@ export interface AIAskResult {
 const DEFAULT_SESSION = "app-assistant";
 
 function wantsFinanceOverview(prompt: string): boolean {
-  return /\b(complete finance|full finance|finance manager|overview|explain|summary|everything|all my (money|finance)|know my finance|my finances|whole finance)\b/i.test(
+  // Do NOT match bare "explain" / "summary" — those fire on stock questions
+  // like "explain tcs stock" and short-circuit past the backend.
+  return /\b(complete finance|full finance|finance manager|finance overview|money overview|financial (overview|summary)|everything about my (money|finance)|all my (money|finances?)|know my finance|my finances|whole finance|show (me )?(my )?finance(s)?)\b/i.test(
     prompt,
   );
 }
@@ -57,7 +59,7 @@ function wantsPortfolioOverview(prompt: string): boolean {
 
 /** These need backend finance_intel charts — never short-circuit on the client. */
 function wantsInvestmentAnalytics(prompt: string): boolean {
-  return /\b(analytics|charts?|live analytics|past performance|performance report|projection|look like|forecast|6 months|investments with)\b/i.test(
+  return /\b(analytics|charts?|live analytics|past performance|performance report|projection|look like|forecast|6 months|investments with|technical analysis|stock (analysis|performance)|explain .{0,40}\bstock)\b/i.test(
     prompt,
   );
 }
