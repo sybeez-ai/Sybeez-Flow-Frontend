@@ -224,10 +224,9 @@ export function sanitizeAssistantText(
 ): string {
   const raw = (text || "").trim();
   if (!raw) {
-    if (isFinanceSnapshot(financeSnapshot)) {
-      return formatFinanceOverview(financeSnapshot as Record<string, unknown>);
-    }
-    return "I've got your finance data loaded. What would you like to know?";
+    // Never invent a Finance overview mindmap from an empty model reply —
+    // that masked production chat failures as a fake "€0" dashboard dump.
+    return "";
   }
 
   let candidate = raw;
@@ -253,9 +252,6 @@ export function sanitizeAssistantText(
     const start = candidate.indexOf("{");
     const end = candidate.lastIndexOf("}");
     if (start < 0 || end <= start) {
-      if (isFinanceSnapshot(financeSnapshot)) {
-        return formatFinanceOverview(financeSnapshot as Record<string, unknown>);
-      }
       return raw;
     }
     const parsed = JSON.parse(candidate.slice(start, end + 1));
@@ -271,16 +267,16 @@ export function sanitizeAssistantText(
     if (parsed && isFinanceSnapshot(parsed.reply)) {
       return formatFinanceOverview(parsed.reply);
     }
-    if (isFinanceSnapshot(financeSnapshot)) {
-      return formatFinanceOverview(financeSnapshot as Record<string, unknown>);
-    }
+    // Parsed JSON but not a snapshot — keep original model text rather than
+    // replacing with a blank Finance overview from context.
+    return raw
+      .replace(/\bTavily\s+summary\b/gi, "Market research")
+      .replace(/\bTavily\b/gi, "market research")
+      .replace(/\bSerpAPI\b/gi, "web search");
   } catch {
-    if (isFinanceSnapshot(financeSnapshot)) {
-      return formatFinanceOverview(financeSnapshot as Record<string, unknown>);
-    }
+    return raw
+      .replace(/\bTavily\s+summary\b/gi, "Market research")
+      .replace(/\bTavily\b/gi, "market research")
+      .replace(/\bSerpAPI\b/gi, "web search");
   }
-
-  return (
-    "I've loaded your Finance Manager. Ask me about savings, EMIs, bills, or this month's In & Out."
-  );
 }

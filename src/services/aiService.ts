@@ -57,10 +57,20 @@ function wantsPortfolioOverview(prompt: string): boolean {
   );
 }
 
+/** Stock / ticker / market questions must always hit the backend — never a local snapshot dump. */
+function isStockOrMarketQuestion(prompt: string): boolean {
+  return /\b(stock|stocks|share|shares|ticker|equity|etf|nasdaq|nifty|sensex|portfolio|holding|holdings|invest|investment|quote|price of|technical analysis|analytics|charts?)\b/i.test(
+    prompt,
+  );
+}
+
 /** These need backend finance_intel charts — never short-circuit on the client. */
 function wantsInvestmentAnalytics(prompt: string): boolean {
-  return /\b(analytics|charts?|live analytics|past performance|performance report|projection|look like|forecast|6 months|investments with|technical analysis|stock (analysis|performance)|explain .{0,40}\bstock)\b/i.test(
-    prompt,
+  return (
+    isStockOrMarketQuestion(prompt) ||
+    /\b(live analytics|past performance|performance report|projection|look like|forecast|6 months|investments with)\b/i.test(
+      prompt,
+    )
   );
 }
 
@@ -108,13 +118,15 @@ export async function askAIDetailed(
     context.enableWebSearch === true ||
     isFinance;
 
-  // Instant overview only on a fresh thread — never skip the LLM on follow-ups
-  // or when the user asked for live investment analytics / charts.
+  // Instant overview only on a fresh thread — never skip the LLM on follow-ups,
+  // stock/market questions, or live investment analytics / charts.
   const hasPriorTurns = Array.isArray(history) && history.length > 0;
   const wantsCharts = wantsInvestmentAnalytics(prompt);
+  const stockAsk = isStockOrMarketQuestion(prompt);
   if (
     !hasPriorTurns &&
     !wantsCharts &&
+    !stockAsk &&
     isFinance &&
     snap &&
     typeof snap === "object" &&
@@ -126,6 +138,7 @@ export async function askAIDetailed(
   if (
     !hasPriorTurns &&
     !wantsCharts &&
+    !stockAsk &&
     isFinance &&
     snap &&
     typeof snap === "object" &&
@@ -223,8 +236,9 @@ export async function askAIDetailed(
     };
   }
 
-  // Fallback: client-side Perplexity (no agentic writes) — skipped in production builds
-  const allowPerplexityFallback = !import.meta.env.PROD;
+  // Dev-only Perplexity fallback. Never use it to fake stock analytics in production,
+  // and never replace a failed stock/market ask with a blank Finance overview mindmap.
+  const allowPerplexityFallback = !import.meta.env.PROD && !stockAsk;
   if (allowPerplexityFallback) {
     try {
       const messages: PerplexityMessage[] = [];
@@ -245,12 +259,6 @@ export async function askAIDetailed(
     }
   }
 
-  if (snap && typeof snap === "object") {
-    return {
-      text: formatFinanceOverview(snap as Record<string, unknown>),
-      actions: [],
-    };
-  }
   return {
     text:
       backendHttpError ||
