@@ -5,7 +5,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  CheckCircle2,
   ChevronRight,
   Loader2,
   MessageSquareHeart,
@@ -48,7 +47,8 @@ const CATEGORIES = [
 
 export default function FeedbackSection() {
   const [loading, setLoading] = useState(true);
-  const [submitted, setSubmitted] = useState(isFeedbackSubmittedLocal());
+  const [hasSubmittedBefore, setHasSubmittedBefore] = useState(isFeedbackSubmittedLocal());
+  const [submitCount, setSubmitCount] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<"form" | "success">("form");
@@ -66,7 +66,8 @@ export default function FeedbackSection() {
     setLoading(true);
     try {
       const status = await fetchFeedbackStatus();
-      setSubmitted(status.submitted);
+      setHasSubmittedBefore(Boolean(status.submitted));
+      setSubmitCount(Number(status.count || 0));
       setIsAdmin(status.is_admin);
       if (status.submitted) clearFeedbackNudgeNotifications();
       if (status.is_admin) {
@@ -80,7 +81,7 @@ export default function FeedbackSection() {
         }
       }
     } catch {
-      setSubmitted(isFeedbackSubmittedLocal());
+      setHasSubmittedBefore(isFeedbackSubmittedLocal());
     } finally {
       setLoading(false);
     }
@@ -101,7 +102,6 @@ export default function FeedbackSection() {
   };
 
   const openForm = () => {
-    if (submitted) return;
     setPhase("form");
     setOpen(true);
   };
@@ -124,23 +124,17 @@ export default function FeedbackSection() {
         category,
         recommend,
       });
-      setSubmitted(true);
+      setHasSubmittedBefore(true);
+      setSubmitCount((c) => c + 1);
       clearFeedbackNudgeNotifications();
       setPhase("success");
-      toast.success("Feedback submitted successfully");
+      toast.success("Feedback submitted — thank you");
       if (isAdmin) void load();
       window.setTimeout(() => {
         returnToProfile();
       }, 1600);
     } catch (e) {
-      if (e instanceof Error && e.message === "already_submitted") {
-        setSubmitted(true);
-        clearFeedbackNudgeNotifications();
-        setPhase("success");
-        window.setTimeout(() => returnToProfile(), 1200);
-      } else {
-        toast.error(e instanceof Error ? e.message : "Submit failed");
-      }
+      toast.error(e instanceof Error ? e.message : "Submit failed");
     } finally {
       setSending(false);
     }
@@ -165,43 +159,24 @@ export default function FeedbackSection() {
       <button
         type="button"
         onClick={openForm}
-        disabled={submitted}
-        className={`w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-colors ${
-          submitted
-            ? "border-emerald-500/20 bg-emerald-500/5 cursor-default"
-            : "border-border bg-foreground/5 hover:bg-foreground/[0.07] hover:border-foreground/20"
-        }`}
+        className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-colors border-border bg-foreground/5 hover:bg-foreground/[0.07] hover:border-foreground/20"
       >
-        <div
-          className={`flex h-10 w-10 flex-none items-center justify-center rounded-xl ring-1 ${
-            submitted
-              ? "bg-emerald-500/15 ring-emerald-500/30 text-emerald-400"
-              : "bg-foreground/10 ring-border"
-          }`}
-        >
-          {submitted ? (
-            <CheckCircle2 className="h-5 w-5" />
-          ) : (
-            <MessageSquareHeart className="h-5 w-5" />
-          )}
+        <div className="flex h-10 w-10 flex-none items-center justify-center rounded-xl ring-1 bg-foreground/10 ring-border">
+          <MessageSquareHeart className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">
-            {submitted ? "Feedback submitted" : "Share product feedback"}
+            {hasSubmittedBefore ? "Send more feedback" : "Share product feedback"}
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {submitted
-              ? "Thanks — your response is with the Sybeez team"
+            {hasSubmittedBefore
+              ? submitCount > 0
+                ? `You've sent ${submitCount} response${submitCount === 1 ? "" : "s"} — send another anytime`
+                : "Thanks — you can send another response anytime"
               : "Issues you face, satisfaction, and what to improve"}
           </p>
         </div>
-        {submitted ? (
-          <span className="text-[11px] font-medium text-emerald-400 uppercase tracking-wide">
-            Done
-          </span>
-        ) : (
-          <ChevronRight className="h-4 w-4 text-muted-foreground flex-none" />
-        )}
+        <ChevronRight className="h-4 w-4 text-muted-foreground flex-none" />
       </button>
 
       {isAdmin && (

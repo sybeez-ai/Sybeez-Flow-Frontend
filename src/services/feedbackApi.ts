@@ -5,6 +5,8 @@ const BASE = () => `${getApiBase()}/api/feedback`;
 
 export type FeedbackStatus = {
   submitted: boolean;
+  count?: number;
+  can_submit?: boolean;
   is_admin: boolean;
 };
 
@@ -44,7 +46,10 @@ export async function fetchFeedbackStatus(): Promise<FeedbackStatus> {
   if (!res.ok) throw new Error("Could not load feedback status");
   const data = (await res.json()) as FeedbackStatus;
   if (data.submitted) markFeedbackSubmittedLocal();
-  return data;
+  return {
+    ...data,
+    can_submit: data.can_submit !== false,
+  };
 }
 
 export async function submitFeedback(body: FeedbackSubmitBody): Promise<void> {
@@ -53,10 +58,6 @@ export async function submitFeedback(body: FeedbackSubmitBody): Promise<void> {
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (res.status === 409) {
-    markFeedbackSubmittedLocal();
-    throw new Error("already_submitted");
-  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(
